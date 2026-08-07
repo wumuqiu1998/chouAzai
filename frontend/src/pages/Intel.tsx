@@ -1,18 +1,20 @@
 import { useState, useEffect, useCallback } from "react";
 import { Link } from "react-router-dom";
-import { TrendingUp, FileText, Newspaper, Rss, RefreshCw, Loader2, ExternalLink, AlertCircle, Sparkles, Lightbulb, Star } from "lucide-react";
+import { TrendingUp, FileText, Newspaper, Rss, Globe, RefreshCw, Loader2, ExternalLink, AlertCircle, Sparkles, Lightbulb, Star } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { Disclaimer } from "@/components/ui/Disclaimer";
 import { SaveNoteButton } from "@/components/ui/SaveNoteButton";
+import { HeadlinesPanel } from "@/components/intel/HeadlinesPanel";
 import { api, ApiError, type RadarData, type Industry, type Announcement, type NewsItem } from "@/lib/api";
 import { loadWatch } from "@/lib/watchlist";
 import { hasLlm, chatStream } from "@/lib/llm";
 import { cn } from "@/lib/utils";
 
 const TABS = [
+  { key: "headlines", label: "全球科技头条", icon: Globe, integrated: true, desc: "编辑精选科技头版 + 高信号一手账号（可复用模块）" },
   { key: "events", label: "事件概率", icon: TrendingUp, integrated: false, desc: "全球宏观预期概率（公开数据、免登录只读），后续接入" },
   { key: "filings", label: "A股公告", icon: FileText, integrated: false, desc: "汇总关注列表里各个股的近期公告（东财公开披露）" },
   { key: "news", label: "公开新闻", icon: Newspaper, integrated: false, desc: "汇总关注列表里各个股的近期新闻（公开源）" },
@@ -298,7 +300,7 @@ function WatchlistFeed({ kind }: { kind: "filings" | "news" }) {
 }
 
 export function Intel() {
-  const [tab, setTab] = useState("investment-news");
+  const [tab, setTab] = useState("headlines");
   const cur = TABS.find((t) => t.key === tab)!;
 
   return (
@@ -320,9 +322,15 @@ export function Intel() {
         <div className="mb-3 flex items-center gap-2">
           <cur.icon className="h-5 w-5 text-primary" />
           <h3 className="font-semibold">{cur.label}</h3>
-          {cur.integrated && <span className="rounded-full bg-primary/15 px-2 py-0.5 text-[10px] text-primary">investment-news</span>}
+          {cur.integrated && (
+            <span className="rounded-full bg-primary/15 px-2 py-0.5 text-[10px] text-primary">
+              {cur.key === "headlines" ? "headlines-kit" : "investment-news"}
+            </span>
+          )}
         </div>
-        {cur.key === "investment-news" ? (
+        {cur.key === "headlines" ? (
+          <HeadlinesPanel />
+        ) : cur.key === "investment-news" ? (
           <InvestmentNewsPanel />
         ) : cur.key === "filings" ? (
           <WatchlistFeed kind="filings" />

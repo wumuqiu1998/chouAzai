@@ -1,0 +1,39 @@
+{
+  "news": {
+    "provider": "Techmeme",
+    "river_url": "https://www.techmeme.com/river",
+    "rss_url": "https://www.techmeme.com/feed.xml",
+    "max_items": 30
+  },
+  "x": {
+    "cli": "C:\\Users\\WumuQiu\\.local\\bin\\twitter.exe",
+    "per_account": 12,
+    "window_hours": 72,
+    "max_items": 80,
+    "accounts": [
+      { "handle": "SemiAnalysis_", "name": "Dylan Patel · SemiAnalysis", "role": "半导体一手分析师", "hub": true },
+      { "handle": "mingchikuo", "name": "郭明錤 · 供应链", "role": "供应链分析师", "hub": false },
+      { "handle": "DrJimFan", "name": "Jim Fan · 具身智能", "role": "具身智能科学家", "hub": false },
+      { "handle": "nvidia", "name": "NVIDIA 官方", "role": "AI 硬件企业", "hub": false },
+      { "handle": "elonmusk", "name": "Elon Musk · Tesla/xAI", "role": "企业创始人", "hub": false },
+      { "handle": "adcock_brett", "name": "Brett Adcock · Figure", "role": "人形机器人创始人", "hub": false },
+      { "handle": "aleabitoreddit", "name": "Serenity", "role": "产业瓶颈研究者", "hub": false }
+    ]
+  },
+  "relevant_keywords": [
+    "hbm", "dram", "memory", "micron", "hynix", "samsung",
+    "nvidia", "rubin", "kyber", "blackwell", "gpu", "tsmc", "chip",
+    "semiconductor", "foundry", "asml", "lithography", "packaging",
+    "optical", "cpo", "photonic", "interconnect",
+    "robot", "humanoid", "figure", "optimus", "unitree",
+    "anthropic", "openai", "data center", "datacenter"
+  ],
+  "redline_keywords": [
+    "赌博", "博彩", "赌场", "彩票", "下注", "押注", "预测市场",
+    "polymarket", "kalshi", "prediction market",
+    "加密货币", "虚拟货币", "比特币", "以太坊", "稳定币",
+    "crypto", "bitcoin", "ethereum", "stablecoin",
+    "gambling", "betting", "casino", "lottery", "sportsbook",
+    "色情", "porn"
+  ]
+}

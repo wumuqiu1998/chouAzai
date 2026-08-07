@@ -1,0 +1,22 @@
+initial_cash: 1000000.0
+commission_rate: 0.0003
+stamp_duty_rate: 0.0005
+slippage: 0.0005
+lot_size: 100
+fill_price: next_open
+rebalance_freq_days: 5
+holding_period_days: 5
+top_n: 20
+limit_up_pct: 0.098
+limit_down_pct: 0.098
+enforce_limit: true
+t_plus_one: true
+metrics:
+- annual_return
+- max_drawdown
+- sharpe
+- turnover
+- cost
+- yearly
+- selection_count
+- return_concentration

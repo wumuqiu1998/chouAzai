@@ -29,6 +29,9 @@ dist/
 build/
 frontend/tsconfig.tsbuildinfo
 
+# 量化研究框架：本地实验日志（含失败实验，仅存本机）
+backend/quant_framework/data/
+
 # ── 编辑器 / 系统 / 工具 ──────────────────────────────────────────
 **/.claude/
 .DS_Store

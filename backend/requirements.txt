@@ -3,8 +3,16 @@ fastapi>=0.110
 uvicorn[standard]>=0.29
 requests
 
-# 全栈数据源（较重）——一致预期 / 新闻 / 公告 / K线 / 财务
+# 全栈数据源（较重）——一致预期 / 新闻 / 公告 / K线 / 财务 / 短线复盘
 # 未安装时对应端点会返回 501 + 安装提示，不影响行情/研报
-akshare>=1.10
+akshare>=1.18
 mootdx>=0.10
 pandas
+mini-racer>=0.12
+
+# 短线复盘（vibe-astock / duanxian 模块，可选 —— 不装则 /api/review/* 不可用）
+langgraph>=0.6
+langchain-core>=0.3
+langchain-openai>=0.3
+pydantic>=2
+python-dotenv>=1

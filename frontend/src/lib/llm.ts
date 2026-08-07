@@ -40,10 +40,42 @@ export function loadLlm(): LlmConfig | null {
 
 export function saveLlm(cfg: LlmConfig) {
   storageSet(KEY, JSON.stringify(cfg));
+  void syncLlmToBackend(cfg);
 }
 
 export function clearLlm() {
   storageRemove(KEY);
+  void fetch("/api/settings/llm", { method: "DELETE", headers: authHeaders() }).catch(() => {});
+}
+
+/** 浏览器 localStorage 按端口隔离（5899≠5900）。从本机后端恢复上次保存的配置。 */
+export async function restoreLlmFromBackend(): Promise<LlmConfig | null> {
+  if (loadLlm()) return loadLlm();
+  try {
+    const resp = await fetch("/api/settings/llm", { headers: authHeaders() });
+    if (!resp.ok) return null;
+    const payload = await resp.json();
+    const c = payload?.data as LlmConfig | null;
+    if (!c?.model) return null;
+    const ok = isCliProvider(c.provider) || (c.baseURL && c.apiKey);
+    if (!ok) return null;
+    storageSet(KEY, JSON.stringify(c));
+    return c;
+  } catch {
+    return null;
+  }
+}
+
+async function syncLlmToBackend(cfg: LlmConfig) {
+  try {
+    await fetch("/api/settings/llm", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      body: JSON.stringify(cfg),
+    });
+  } catch {
+    /* 后端未起时仅本地保存 */
+  }
 }
 
 export function hasLlm(): boolean {

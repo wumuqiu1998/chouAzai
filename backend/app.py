@@ -12,6 +12,17 @@ from __future__ import annotations
 import json
 import os
 
+# 可选 .env：backend/.env 存在则加载（已 export 的变量优先）——对应 .env.example 的用法说明。
+# 放在本地模块 import 之前，保证各模块 import 期读到的环境变量已就位。
+_ENV_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+if os.path.exists(_ENV_FILE):
+    with open(_ENV_FILE, encoding="utf-8") as _f:
+        for _line in _f:
+            _line = _line.strip()
+            if _line and not _line.startswith("#") and "=" in _line:
+                _k, _v = _line.split("=", 1)
+                os.environ.setdefault(_k.strip(), _v.strip().strip('"').strip("'"))
+
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
@@ -21,17 +32,49 @@ import astock
 import chat as chat_layer
 import cli_runtime
 import debate as debate_layer
+import firstboard
 import gstock
+import headlines as headlines_layer
+import llm_settings
 import newsradar
 import portfolio as pf
 import market
 import myreports as mr
 import reflection as reflect_layer
 
-app = FastAPI(title="Vibe-Research API", version="0.2.2")
+app = FastAPI(title="Vibe-Research API", version="0.2.3")
+
+# 量化研究框架（quant_framework）导入路径：backend/quant_framework/
+import sys
+
+_QF_ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "quant_framework")
+if _QF_ROOT not in sys.path:
+    sys.path.insert(0, _QF_ROOT)
+
+try:
+    import duanxian_api
+
+    duanxian_api.register(app)
+except ImportError as _dx_exc:  # noqa: F841
+    import sys
+    print(f"⚠️ 短线复盘模块未完整加载（pip install -r requirements.txt）：{_dx_exc}", file=sys.stderr)
 
 # 每半小时后台刷新持仓数据
 pf.start_scheduler(1800)
+
+# 量化研究框架：研究假设卡 / 固定回测 / 实验日志 / 对抗审计
+try:
+    from quant_framework.api import audit_api as quant_audit_api
+    from quant_framework.api import backtest_api as quant_backtest_api
+    from quant_framework.api import config_api as quant_config_api
+    from quant_framework.api import experiments_api as quant_experiments_api
+
+    app.include_router(quant_config_api.router)
+    app.include_router(quant_backtest_api.router)
+    app.include_router(quant_experiments_api.router)
+    app.include_router(quant_audit_api.router)
+except ImportError as _qf_exc:  # noqa: F841
+    print(f"量化研究模块未完整加载（需 pandas/pyyaml/fastapi）：{_qf_exc}", file=sys.stderr)
 
 # CORS：默认放开（本地自托管友好）；公网部署时用 VR_ALLOW_ORIGINS 收紧成白名单。
 #   例：VR_ALLOW_ORIGINS="https://myhost"  （逗号分隔多个）
@@ -39,7 +82,7 @@ _ORIGINS = [o.strip() for o in os.environ.get("VR_ALLOW_ORIGINS", "*").split(","
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_ORIGINS,
-    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
 
@@ -72,7 +115,7 @@ def _validate(code: str) -> str:
 
 @app.get("/api/health")
 def health():
-    return {"ok": True, "service": "vibe-research-api", "version": "0.2.2"}
+    return {"ok": True, "service": "vibe-research-api", "version": "0.2.3"}
 
 
 class LLMConfig(BaseModel):
@@ -80,6 +123,30 @@ class LLMConfig(BaseModel):
     baseURL: str = ""        # 订阅接入时留空
     apiKey: str = ""         # 订阅接入时留空
     model: str
+
+
+@app.get("/api/settings/llm")
+def settings_llm_get():
+    """读取本机持久化的 LLM 配置（换端口/清浏览器缓存后可恢复）。"""
+    cfg = llm_settings.load_config()
+    if not cfg:
+        return {"data": None}
+    return {"data": cfg}
+
+
+@app.post("/api/settings/llm")
+def settings_llm_save(cfg: LLMConfig):
+    """保存 LLM 配置到 ~/.vibe-research/llm_config.json，供短线复盘后端读取。"""
+    try:
+        return {"data": llm_settings.save_config(cfg.model_dump())}
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+
+
+@app.delete("/api/settings/llm")
+def settings_llm_delete():
+    llm_settings.clear_config()
+    return {"data": {"ok": True}}
 
 
 class ChatReq(BaseModel):
@@ -311,6 +378,24 @@ def radar_refresh():
         raise HTTPException(502, f"资讯雷达刷新失败：{e}") from e
 
 
+@app.get("/api/headlines")
+def get_headlines():
+    """全球头条：读缓存，无缓存返回空骨架。"""
+    try:
+        return {"data": headlines_layer.get_headlines(force=False)}
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"全球头条异常：{e}") from e
+
+
+@app.post("/api/headlines/refresh")
+def headlines_refresh():
+    """强制重抓（新闻约 10 秒；接了 X 模块约 1-2 分钟），只刷这一块。"""
+    try:
+        return {"data": headlines_layer.fetch_headlines()}
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"全球头条刷新失败：{e}") from e
+
+
 @app.get("/api/market/overview")
 def market_overview():
     """市场情绪 + 板块资金流（板块/大盘级，全站共享缓存 5 分钟）。"""
@@ -331,6 +416,15 @@ def market_emotion():
         return {"data": market.get_short_term_emotion()}
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"短线情绪异常：{e}") from e
+
+
+@app.get("/api/market/first-board")
+def market_first_board():
+    """首板分析：今日首板涨停股（连板数=1）+ 涨停原因题材串（问财，缺 key 优雅降级）。"""
+    try:
+        return {"data": firstboard.get_first_board()}
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"首板数据异常：{e}") from e
 
 
 @app.get("/api/market/turnover-top")
@@ -518,6 +612,24 @@ def kline(code: str = Query(...), category: int = Query(4), offset: int = Query(
         raise HTTPException(502, f"K线源异常：{e}") from e
 
 
+_MINUTE_CACHE: dict = {}
+
+
+@app.get("/api/minute")
+def minute_line(code: str = Query(...)):
+    """当日分时：价格 + 均价 + 成交量（腾讯，缓存 20 秒）。"""
+    code = _validate(code)
+    hit = _MINUTE_CACHE.get(code)
+    if hit and _time.time() - hit[0] < 20:
+        return {"data": hit[1]}
+    try:
+        data = astock.minute_line(code)
+        _MINUTE_CACHE[code] = (_time.time(), data)
+        return {"data": data}
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"分时源异常：{e}") from e
+
+
 @app.get("/api/finance")
 def finance(code: str = Query(...)):
     """季报财务快照（需 mootdx）。"""
@@ -662,3 +774,53 @@ def industry(top: int = Query(20, ge=5, le=50)):
         return {"data": data}
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"行业排名异常：{e}") from e
+
+
+@app.get("/api/live/snapshot")
+def live_snapshot():
+    """实盘看盘聚合快照：指数 / 全球指数 / 市场情绪 / 板块资金 / 成交额榜 / 快讯 / 持仓。
+
+    每个数据块独立容错，任一失败不影响其他块；前端按 3-5 秒轮询。
+    """
+    out = {
+        "indices": [],
+        "global_indices": [],
+        "overview": None,
+        "emotion": None,
+        "turnover": None,
+        "headlines": None,
+        "portfolio": None,
+    }
+    try:
+        out["indices"] = astock.index_quote()
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        out["global_indices"] = market.get_global_indices()
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        out["overview"] = market.get_overview()
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        out["emotion"] = market.get_short_term_emotion()
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        out["turnover"] = market.get_turnover_top()
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        h = headlines_layer.get_headlines(force=False)
+        if isinstance(h, dict) and h.get("news"):
+            out["headlines"] = {"generated_at": h.get("generated_at"), "news": h["news"][:10]}
+        else:
+            out["headlines"] = h
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        out["portfolio"] = pf.get_portfolio()
+    except Exception:  # noqa: BLE001
+        pass
+    return out

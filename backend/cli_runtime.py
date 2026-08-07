@@ -64,13 +64,22 @@ class CliUnavailable(RuntimeError):
 
 
 def _find_bin(name: str) -> str | None:
-    hit = shutil.which(name)
-    if hit:
-        return hit
+    # Windows 的 PATH 里可能同时存在无扩展名的 shim（例如 Codex Desktop
+    # bundle 内的 `codex`）和真正可启动的 `codex.exe`。前者会被
+    # subprocess 当作不可执行文件并抛 [WinError 5]；因此必须优先解析
+    # 有效的 Windows 可执行扩展名，而不是直接接受 shutil.which(name)。
+    candidates = [name]
+    if os.name == "nt" and not Path(name).suffix:
+        candidates = [f"{name}.exe", f"{name}.cmd", f"{name}.bat", name]
+    for candidate in candidates:
+        hit = shutil.which(candidate)
+        if hit:
+            return hit
     for d in _EXTRA_PATH_DIRS:
-        p = Path(d) / name
-        if p.is_file() and os.access(p, os.X_OK):
-            return str(p)
+        for candidate in candidates:
+            p = Path(d) / candidate
+            if p.is_file() and os.access(p, os.X_OK):
+                return str(p)
     return None
 
 
@@ -132,6 +141,11 @@ def run_cli(kind: str, system_prompt: str, user_prompt: str) -> str:
                 env=env,
                 timeout=_CLI_TIMEOUT_S,
             )
+        except PermissionError as e:
+            raise CliUnavailable(
+                f"无法启动 {kind} CLI（{bin_path}）：Windows 拒绝访问。"
+                "请在「接入 AI」改用 API 接入，或安装并登录一个可独立执行的官方 CLI。"
+            ) from e
         except subprocess.TimeoutExpired as e:
             raise RuntimeError(f"{kind} 生成超时（>{_CLI_TIMEOUT_S}s）") from e
 
@@ -174,13 +188,19 @@ def run_cli_stream(kind: str, system_prompt: str, user_prompt: str):
             args = [*d["build_args"](None), combined]
             stdin_payload = None
 
-        proc = subprocess.Popen(
-            [bin_path, *args], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-            # stderr 不能丢：CLI 的失败原因只在这里，丢了用户就只看到光秃秃的
-            # 「退出码 1」（issue #16）。但必须持续排空，否则管道写满会死锁。
-            stderr=subprocess.PIPE, cwd=tmpdir, env=env, text=True, bufsize=1,
-            encoding="utf-8", errors="replace",
-        )
+        try:
+            proc = subprocess.Popen(
+                [bin_path, *args], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                # stderr 不能丢：CLI 的失败原因只在这里，丢了用户就只看到光秃秃的
+                # 「退出码 1」（issue #16）。但必须持续排空，否则管道写满会死锁。
+                stderr=subprocess.PIPE, cwd=tmpdir, env=env, text=True, bufsize=1,
+                encoding="utf-8", errors="replace",
+            )
+        except PermissionError as e:
+            raise CliUnavailable(
+                f"无法启动 {kind} CLI（{bin_path}）：Windows 拒绝访问。"
+                "请在「接入 AI」改用 API 接入，或安装并登录一个可独立执行的官方 CLI。"
+            ) from e
         err_tail: deque = deque(maxlen=40)   # 只留尾部若干行，避免长进度日志占内存
 
         def _drain_err(stderr=proc.stderr):

@@ -1,9 +1,9 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { KeyRound, Sparkles, ShieldCheck, Check, Trash2, Terminal } from "lucide-react";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { toast } from "sonner";
-import { loadLlm, saveLlm, clearLlm } from "@/lib/llm";
+import { loadLlm, saveLlm, clearLlm, restoreLlmFromBackend } from "@/lib/llm";
 import { loadAccessKey, saveAccessKey } from "@/lib/api";
 import { subscriptionModels, apiModels, PROVIDER_BASE, isCliProvider, aiModels, type ProviderId } from "@/lib/ai-models";
 
@@ -23,6 +23,25 @@ export function Settings() {
   // 后端访问密钥（对应部署时的 VR_API_KEY）；本机自用不设鉴权时留空
   const [accessKey, setAccessKey] = useState(loadAccessKey());
 
+  const applyConfig = (c: NonNullable<ReturnType<typeof loadLlm>>) => {
+    const cli = isCliProvider(c.provider);
+    setMode(cli ? "subscription" : "api");
+    if (cli) {
+      setCliId(c.model);
+    } else {
+      setApiId(c.model);
+      setModelName(c.model);
+      setBaseURL(c.baseURL);
+      setApiKey(c.apiKey);
+    }
+  };
+
+  useEffect(() => {
+    restoreLlmFromBackend().then((c) => {
+      if (c) applyConfig(c);
+    });
+  }, []);
+
   const providerOf = (id: string): ProviderId => aiModels.find((m) => m.id === id)?.provider ?? "openai-compatible";
 
   const pickApiModel = (id: string) => {
@@ -39,7 +58,7 @@ export function Settings() {
       return;
     }
     saveLlm({ provider: providerOf(apiId), baseURL: baseURL.trim(), apiKey: apiKey.trim(), model: modelName.trim() });
-    toast.success("已保存到本地，全站「问 AI / 复盘」现在可用");
+    toast.success("已保存（浏览器 + 本机 ~/.vibe-research，换端口也不会丢）");
   };
 
   const saveSubscription = () => {
@@ -49,7 +68,7 @@ export function Settings() {
       return;
     }
     saveLlm({ provider: m.provider, baseURL: "", apiKey: "", model: m.id });
-    toast.success(`已选「${m.name}」订阅，全站「问 AI / 复盘」将调用本机 ${m.name}`);
+    toast.success(`已选「${m.name}」订阅（已同步到本机，短线复盘也可用）`);
   };
 
   const forget = () => {
@@ -72,7 +91,7 @@ export function Settings() {
 
       <div className="mb-4 flex items-start gap-2 rounded-lg border border-success/25 bg-success/5 p-3 text-xs text-muted-foreground">
         <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-success" />
-        <span>API key <b className="text-foreground">只存在你本地浏览器</b>，仅在你提问时发给你自己的后端去调模型，不上传、不进仓库。所有分析由你的模型给出，本产品不校准。</span>
+        <span>API key 存在<b className="text-foreground">本机</b>（浏览器 + <code className="text-foreground/80">~/.vibe-research/</code>），不上传、不进仓库。请固定用 <b className="text-foreground">http://localhost:5899</b> 打开，避免端口变化导致浏览器缓存读不到。</span>
       </div>
 
       {/* 两种接入方式 */}

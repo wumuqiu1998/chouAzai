@@ -21,8 +21,16 @@
       "verified": true,
       "nodes": ["AI芯片", "光模块", "CPO光互连", "HBM存储", "先进封装", "PCB", "液冷散热"]
     },
-    { "key": "hbm", "label": "HBM", "tagline": "高带宽存储——AI 芯片的内存瓶颈", "hot": true, "verified": false, "nodes": [] },
-    { "key": "cpo", "label": "光互联", "tagline": "光电共封装（CPO）——突破铜互连的带宽墙", "hot": true, "verified": false, "nodes": [] },
+    {
+      "key": "deepseek-chain",
+      "label": "DeepSeek 产业链",
+      "tagline": "从算力底座、模型部署到 Agent 与行业应用的国产 AI 生态",
+      "hot": true,
+      "verified": true,
+      "nodes": ["AI芯片与算力集群", "数据中心与云平台", "模型训练与对齐", "推理服务与API", "私有化部署", "RAG与知识库", "AI Agent与行业应用", "端侧蒸馏"]
+    },
+    { "key": "hbm", "label": "HBM", "tagline": "高带宽存储：AI 加速器旁的内存带宽瓶颈", "hot": true, "verified": true, "nodes": ["HBM3E / HBM4 / HBM4E", "TSV 硅通孔", "堆叠键合", "Base Die", "先进封装与测试"] },
+    { "key": "cpo", "label": "光互联", "tagline": "从可插拔光模块到 CPO：AI 集群的高速互连路线", "hot": true, "verified": true, "nodes": ["400G / 800G / 1.6T / 3.2T", "硅光 PIC", "InP 材料与激光器", "精密耦合与光引擎", "CPO 共封装光学"] },
     { "key": "semiconductor", "label": "半导体国产替代", "tagline": "设备、材料、EDA、制造的自主链条", "hot": true, "verified": false, "nodes": [] },
     { "key": "solid-state-battery", "label": "固态电池", "tagline": "下一代电池的材料与工艺路线", "hot": true, "verified": false, "nodes": [] },
     { "key": "low-altitude", "label": "低空经济", "tagline": "eVTOL、空管、基建与运营", "hot": true, "verified": false, "nodes": [] },

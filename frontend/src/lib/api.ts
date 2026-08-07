@@ -145,6 +145,7 @@ export interface EmotionTier { boards: number; count: number; plus: boolean }
 export interface LianbanStock {
   code: string; name: string; boards: number;
   price: number; pct: number; amount: number | null; float_cap: number | null; industry: string;
+  reason?: string;
 }
 export interface ShortTermEmotion {
   date: string;
@@ -163,6 +164,55 @@ export interface TurnoverStock {
   amount: number | null; mcap: number | null; float_cap: number | null; industry: string;
 }
 export interface TurnoverTop { stocks: TurnoverStock[]; updated: string }
+
+/** 此刻的「实时行情」属于哪一场 */
+export interface MarketSession {
+  now: string; today: string; quotes_of: string | null;
+  is_today: boolean; phase: string; label: string;
+}
+
+export interface OverseasRow {
+  name: string; price: number; change_pct: number;
+  session: string | null; region?: string; ticker?: string;
+}
+export interface OverseasSnapshot {
+  available: boolean; reason?: string;
+  indices?: OverseasRow[]; mag7?: OverseasRow[];
+  us_session?: string | null; hk_session?: string | null;
+  us_label?: string | null; hk_label?: string | null;
+}
+
+export interface LiveEmotion {
+  available: boolean; reason?: string; date?: string; as_of?: string; phase?: string;
+  zt_count?: number; dt_count?: number | null; zb_count?: number | null;
+  max_boards?: number; lianban_count?: number;
+  seal_rate?: number | null; break_rate?: number | null; promotion_rate?: number | null;
+  promotion_base?: number | null; promotion_base_date?: string | null;
+}
+
+export interface FirstBoardStock {
+  code: string; name: string;
+  price: number; pct: number; amount: number | null; float_cap: number | null;
+  industry: string; seal_time: string; break_count: number; reason: string;
+}
+export interface FirstBoardData {
+  date: string; total_zt: number; first_count: number;
+  reason_note: string | null; stocks: FirstBoardStock[];
+}
+
+// 全球头条（新闻 = 编辑精选科技头版；X = 高信号一手账号。rel 为关键词机械匹配，不代表推荐、不预测涨跌）
+export interface HeadlineNews {
+  title: string; src: string; url: string; time: string; rel: boolean; zh?: string;
+}
+export interface HeadlineXPost {
+  name: string; handle: string; role: string; hub: boolean;
+  text: string; zh?: string; time: string; url: string; rel: boolean;
+}
+export interface HeadlinesData {
+  generated_at: string | null; window_hours: number;
+  news_provider: string; x_available: boolean; x_accounts: number;
+  news: HeadlineNews[]; x: HeadlineXPost[];
+}
 
 export interface RadarItem {
   title: string; url: string; time: string; source: string; summary?: string; zh?: string;
@@ -236,13 +286,19 @@ export interface GlobalStock {
 export const api = {
   health: () => get<{ ok: boolean }>("/health"),
   indices: () => get<IndexQuote[]>("/indices"),
+  marketSession: () => get<MarketSession>("/market/session"),
+  overseas: () => get<OverseasSnapshot>("/market/overseas"),
+  liveEmotion: () => get<LiveEmotion>("/market/live-emotion"),
   marketOverview: () => get<MarketOverview>("/market/overview"),
   emotion: () => get<ShortTermEmotion>("/market/emotion"),
+  firstBoard: () => get<FirstBoardData>("/market/first-board"),
   turnoverTop: () => get<TurnoverTop>("/market/turnover-top"),
   globalIndices: () => get<GlobalIndex[]>("/global/indices"),
   globalStock: (symbol: string) => get<GlobalStock>(`/global/stock?symbol=${encodeURIComponent(symbol)}`),
   radar: () => get<RadarData>("/radar"),
   radarRefresh: () => request<RadarData>("/radar/refresh", "POST"),
+  headlines: () => get<HeadlinesData>("/headlines"),
+  headlinesRefresh: () => request<HeadlinesData>("/headlines/refresh", "POST"),
   portfolio: () => get<PortfolioData>("/portfolio"),
   addHolding: (code: string, shares: number, cost: number) => request<PortfolioData>("/portfolio/holding", "POST", { code, shares, cost }),
   removeHolding: (code: string) => request<PortfolioData>(`/portfolio/holding?code=${code}`, "DELETE"),

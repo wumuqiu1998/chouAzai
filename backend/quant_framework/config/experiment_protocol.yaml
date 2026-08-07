@@ -1,0 +1,31 @@
+# 实验协议：回测之前提前制定，进入盲测前冻结。
+
+dev_ratio: 0.6                 # 开发集
+val_ratio: 0.2                 # 验证集
+blind_ratio: 0.2               # 盲测集（冻结前不查看，只跑一次）
+
+# 滚动验证（样本外）
+walk_forward:
+  train_days: 250
+  test_days: 21
+  label_horizon_days: 5        # 预测标签长度（Purging 用）
+  embargo_days: 5              # 隔离区（按标签期/序列相关定，非因子窗口）
+
+# 实验纪律
+max_changes_per_experiment: 1  # 一次实验最多修改一个变量
+keep_failed_experiments: true  # 失败的实验必须保留
+
+# 通过/失败标准（示例，按策略调整）
+pass_criteria:
+  oos_rank_ic_positive: true
+  cost_after_return_positive: true
+  yearly_positive_ratio: 0.6
+  max_drawdown_upper: -0.25
+
+failure_criteria:
+  - 分组收益没有单调性
+  - 样本外 RankIC 接近零
+  - 收益集中在某一年
+  - 加入交易成本后收益消失
+  - 只有极端参数有效
+  - 去掉少数股票后收益大幅下降

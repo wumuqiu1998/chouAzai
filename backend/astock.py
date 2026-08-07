@@ -260,11 +260,171 @@ def _mootdx_client():
         raise DependencyMissing("mootdx 未安装：pip install mootdx") from e
 
 
+_KLINE_PERIOD = {
+    0: "m5",
+    1: "m15",
+    2: "m30",
+    3: "m60",
+    4: "day",
+    5: "week",
+    6: "month",
+    7: "m1",
+    9: "day",
+    11: "m60",
+}
+
+
+def _tencent_kline(code: str, period: str, offset: int) -> list[dict]:
+    """腾讯历史 K 线备源：日/周/月/60分钟等，qfq 前复权。"""
+    import requests
+
+    qcode = ("sh" if code.startswith(("5", "6", "9")) else "sz") + code
+    if period in {"m1", "m5", "m15", "m30", "m60"}:
+        # 分钟 K 线走 mkline 接口（fqkline 不支持分钟线）
+        resp = requests.get(
+            "https://ifzq.gtimg.cn/appstock/app/kline/mkline",
+            params={"param": f"{qcode},{period},,{offset}"},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        node = resp.json().get("data", {}).get(qcode) or {}
+        rows = node.get(period) or []
+    else:
+        resp = requests.get(
+            "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get",
+            params={"param": f"{qcode},{period},,,{offset},qfq"},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        node = resp.json().get("data", {}).get(qcode) or {}
+        rows = node.get(f"qfq{period}") or node.get(period) or []
+
+    def _fmt_dt(raw: str) -> str:
+        raw = str(raw)
+        if len(raw) == 12 and raw.isdigit():
+            return f"{raw[:4]}-{raw[4:6]}-{raw[6:8]} {raw[8:10]}:{raw[10:12]}"
+        return raw
+
+    out: list[dict] = []
+    for row in rows:
+        if not row or len(row) < 6:
+            continue
+        vol = float(row[5] or 0)
+        amount = 0.0
+        if len(row) > 6 and row[6]:
+            # 周K/月K 的部分行第 7 个元素是分红除权信息 dict（如 {"fh_sh": "280.242"}）
+            if isinstance(row[6], dict):
+                try:
+                    amount = float(row[6].get("fh_sh") or 0)
+                except (TypeError, ValueError):
+                    amount = 0.0
+            elif isinstance(row[6], (int, float, str)):
+                try:
+                    amount = float(row[6])
+                except (TypeError, ValueError):
+                    amount = 0.0
+        out.append(
+            {
+                "datetime": _fmt_dt(row[0]),
+                "open": float(row[1]),
+                "close": float(row[2]),
+                "high": float(row[3]),
+                "low": float(row[4]),
+                "vol": vol,
+                "volume": vol,
+                "amount": amount,
+            }
+        )
+    return out
+
+
+def minute_line(code: str) -> dict:
+    """腾讯分时：points[{time, price, avg_price, volume}] + prev_close + name。"""
+    import requests
+
+    qcode = ("sh" if code.startswith(("5", "6", "9")) else "sz") + code
+    resp = requests.get(
+        "https://web.ifzq.gtimg.cn/appstock/app/minute/query",
+        params={"code": qcode},
+        timeout=10,
+    )
+    resp.raise_for_status()
+    node = (resp.json().get("data") or {}).get(qcode) or {}
+    inner = node.get("data") or {}
+    raw = inner.get("data") if isinstance(inner, dict) else inner
+    qt = node.get("qt") or {}
+    qt_list = qt.get(qcode) if isinstance(qt, dict) else qt
+
+    name = ""
+    prev_close = 0.0
+    if isinstance(qt_list, list) and len(qt_list) > 4:
+        if len(qt_list) > 1:
+            name = str(qt_list[1])
+        try:
+            prev_close = float(qt_list[4])
+        except (TypeError, ValueError):
+            prev_close = 0.0
+
+    points: list[dict] = []
+    cum_amt = 0.0
+    cum_shares = 0.0
+    for line in raw or []:
+        if isinstance(line, str):
+            parts = line.split()
+            if len(parts) < 3:
+                continue
+            t, price, vol = parts[0], parts[1], parts[2]
+            amt = parts[3] if len(parts) > 3 else "0"
+        elif isinstance(line, dict):
+            t = str(line.get("time") or line.get("t") or "")
+            price = line.get("price")
+            vol = line.get("volume") or line.get("vol") or 0
+            amt = line.get("amount") or 0
+        else:
+            continue
+        try:
+            p = float(price)
+            v = float(vol)
+            a = float(amt)
+        except (TypeError, ValueError):
+            continue
+        cum_shares += v * 100.0  # 手 → 股
+        cum_amt += a
+        avg = round(cum_amt / cum_shares, 2) if cum_shares > 0 else p
+        points.append({"time": t, "price": p, "avg_price": avg, "volume": v})
+    return {"code": code, "name": name, "prev_close": prev_close, "points": points}
+
+
+_KLINE_CACHE: dict = {}
+
+
 def kline(code: str, category: int = 4, offset: int = 60) -> list[dict]:
-    """K线：category 4=日 5=周 6=月 11=60分钟。"""
-    client = _mootdx_client()
-    df = client.bars(symbol=code, category=category, offset=offset)
-    return df.to_dict("records") if df is not None and not df.empty else []
+    """K线：category 4=日 5=周 6=月 11=60分钟。
+
+    腾讯为主源（快、稳），mootdx 为备源；结果按周期短缓存（分钟 8s / 日周月 30s）。
+    """
+    period = _KLINE_PERIOD.get(category, "day")
+    key = (code, category, offset)
+    ttl = 8 if period in {"m1", "m5", "m15", "m30", "m60"} else 30
+    hit = _KLINE_CACHE.get(key)
+    if hit and time.time() - hit[0] < ttl:
+        return hit[1]
+    rows: list[dict] = []
+    try:
+        rows = _tencent_kline(code, period, offset)
+    except Exception:  # noqa: BLE001
+        rows = []
+    if not rows:
+        try:
+            client = _mootdx_client()
+            freq_map = {0: 0, 1: 1, 2: 2, 3: 3, 4: 4, 5: 5, 6: 6, 7: 7, 9: 9, 11: 3}
+            df = client.bars(symbol=code, frequency=freq_map.get(category, 4), offset=offset)
+            if df is not None and not df.empty:
+                rows = df.to_dict("records")
+        except Exception:  # noqa: BLE001
+            rows = []
+    _KLINE_CACHE[key] = (time.time(), rows)
+    return rows
 
 
 def finance(code: str) -> dict:

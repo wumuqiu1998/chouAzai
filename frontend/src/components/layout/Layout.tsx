@@ -3,13 +3,14 @@ import { Link, Outlet, useLocation } from "react-router-dom";
 import {
   Activity, Radar, LayoutGrid, Wallet, Settings, Search, NotebookPen,
   Moon, Sun, ChevronsLeft, ChevronsRight, LineChart, Github, UserRound,
-  Cog, Cpu, Database, Cable, Rocket, FlaskConical, Star, FileText, Swords,
+  Cog, Cpu, BrainCircuit, Database, Cable, Rocket, FlaskConical, Star, FileText, Swords,
+  Flame, CalendarRange, Bot, Radio,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useDarkMode } from "@/hooks/useDarkMode";
 import { storageGet, storageSet } from "@/lib/storage";
 
-const APP_VERSION = "v0.2.2";
+const APP_VERSION = "v0.2.3";
 const REPO_URL = "https://github.com/simonlin1212/Vibe-Research";
 // 作者联系方式
 const X_URL = "https://x.com/linsizhen";
@@ -17,10 +18,16 @@ const MAIL_URL = "mailto:simonlin0423@gmail.com";
 
 const NAV = [
   { to: "/daily-review", icon: Activity, label: "每日复盘" },
+  { to: "/short-term/review", icon: Swords, label: "短线复盘", agent: true },
+  { to: "/short-term/market", icon: Activity, label: "盘面数据" },
+  { to: "/short-term/first-board", icon: Flame, label: "首板分析" },
+  { to: "/short-term/heat", icon: CalendarRange, label: "近5天热度" },
   { to: "/intel", icon: Radar, label: "资讯雷达" },
   { to: "/sectors", icon: LayoutGrid, label: "板块中心" },
   { to: "/stock-data", icon: Search, label: "个股数据" },
   { to: "/debate", icon: Swords, label: "多空辩论" },
+  { to: "/quant-research", icon: FlaskConical, label: "量化研究" },
+  { to: "/live-trading", icon: Radio, label: "实盘看盘" },
   { to: "/watchlist", icon: Star, label: "自选股" },
   { to: "/portfolio", icon: Wallet, label: "我的持仓" },
   { to: "/my-reports", icon: FileText, label: "我的研报" },
@@ -32,6 +39,7 @@ const NAV = [
 const SECTOR_LINKS = [
   { to: "/sectors/humanoid", icon: Cog, label: "人形机器人" },
   { to: "/sectors/ai-computing", icon: Cpu, label: "AI 算力" },
+  { to: "/sectors/deepseek-chain", icon: BrainCircuit, label: "DeepSeek 产业链" },
   { to: "/sectors/hbm", icon: Database, label: "HBM" },
   { to: "/sectors/cpo", icon: Cable, label: "光互联" },
   { to: "/sectors/business-space", icon: Rocket, label: "商业航天" },
@@ -69,7 +77,7 @@ export function Layout() {
 
         {/* Nav */}
         <nav className={cn("flex-1 space-y-1 overflow-auto", collapsed ? "p-1.5" : "p-2.5")}>
-          {NAV.map(({ to, icon: Icon, label }) => {
+          {NAV.map(({ to, icon: Icon, label, agent }) => {
             const active = pathname === to;
             return (
               <div key={to}>
@@ -84,7 +92,14 @@ export function Layout() {
                       : "text-muted-foreground hover:bg-muted/50 hover:text-foreground",
                   )}
                 >
-                  <Icon className="h-4 w-4 shrink-0" />
+                  {agent ? (
+                    <span className="relative flex shrink-0">
+                      <Icon className="h-4 w-4" />
+                      <Bot className="absolute -right-1.5 -top-1.5 h-2.5 w-2.5 rounded-full bg-background text-primary" />
+                    </span>
+                  ) : (
+                    <Icon className="h-4 w-4 shrink-0" />
+                  )}
                   {!collapsed && label}
                 </Link>
 

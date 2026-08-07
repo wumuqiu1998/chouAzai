@@ -5,6 +5,9 @@ import { GlassCard } from "@/components/ui/GlassCard";
 import { AskAiButton } from "@/components/ui/AskAiButton";
 import { Disclaimer } from "@/components/ui/Disclaimer";
 import sectorsData from "@/data/sectors.json";
+import { DeepSeekResearch } from "@/components/sectors/DeepSeekResearch";
+import { OpticalInterconnectResearch } from "@/components/sectors/OpticalInterconnectResearch";
+import { HbmResearch } from "@/components/sectors/HbmResearch";
 
 export function SectorDetail() {
   const { key } = useParams();
@@ -40,7 +43,7 @@ export function SectorDetail() {
         }
       />
 
-      {sector.verified ? (
+      {sector.key === "deepseek-chain" ? <DeepSeekResearch /> : sector.key === "cpo" ? <OpticalInterconnectResearch /> : sector.key === "hbm" ? <HbmResearch /> : sector.verified ? (
         <div>
           <h3 className="mb-3 text-sm font-semibold text-muted-foreground">核心环节（{sector.nodes.length}）</h3>
           <div className="flex flex-wrap gap-2.5">

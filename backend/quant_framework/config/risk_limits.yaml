@@ -1,0 +1,11 @@
+# 硬性风控：AI 无权修改。进入实盘前必须冻结并有人工复核。
+
+max_position_per_stock: 0.10
+max_total_position: 0.95
+max_daily_turnover: 0.30
+max_daily_loss: 0.03
+max_order_amount: 500000
+price_sanity_band: 0.15
+max_duplicate_orders: 1
+disconnect_guard: true
+emergency_stop: false
