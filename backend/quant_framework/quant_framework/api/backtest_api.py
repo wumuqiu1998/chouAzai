@@ -103,7 +103,21 @@ def run_backtest(req: BacktestRequest):
         else:
             ds = SyntheticDataSource(n_symbols=req.n_symbols, n_days=req.n_days, seed=req.seed)
             panel = ds.load_panel()
-        factor = compute_factor(req.factor, panel["close"], volume=panel.get("volume"), window=req.window)
+        factor_names = [f.strip() for f in req.factor.split(",") if f.strip()]
+        unknown = [n for n in factor_names if n not in FACTORS]
+        if unknown:
+            raise HTTPException(status_code=422, detail=f"未知因子：{unknown}，可用：{sorted(FACTORS)}")
+        if len(factor_names) == 1:
+            factor = compute_factor(factor_names[0], panel["close"], volume=panel.get("volume"), window=req.window)
+            factor_label = factor_names[0]
+        else:
+            # 多因子组合：各因子做截面百分位排名后等权平均
+            vals = [
+                compute_factor(n, panel["close"], volume=panel.get("volume"), window=req.window)
+                for n in factor_names
+            ]
+            factor = sum(v.rank(axis=1, pct=True) for v in vals) / len(vals)
+            factor_label = "composite(" + ",".join(factor_names) + ")"
 
         run = engine.run(factor, panel["open"], panel["close"])
         vol = panel["volume"].rolling(5).mean()
@@ -121,6 +135,14 @@ def run_backtest(req: BacktestRequest):
         fstack = factor.stack().dropna()
         groups = grouped_returns(fstack, fwd5, n_groups=10)
         mono = monotonicity_check(groups)
+        groups_list = (
+            [
+                {"group": int(i), "mean_ret": round(float(r["mean_ret"]), 4), "count": int(r["count"])}
+                for i, r in groups.iterrows()
+            ]
+            if not groups.empty
+            else []
+        )
         decay = factor_decay(fstack, panel["close"])
         ics = ic_series(fstack, fwd5)
         ic_by_date = [[str(d.date()), round(float(v), 4)] for d, v in ics.items() if v == v]
@@ -128,7 +150,12 @@ def run_backtest(req: BacktestRequest):
 
         payload = {
             "request": req.model_dump(),
-            "factor": {"name": req.factor, "window": req.window, "available": sorted(FACTORS)},
+            "factor": {
+                "name": factor_label,
+                "window": req.window,
+                "available": sorted(FACTORS),
+                "factors": factor_names if len(factor_names) > 1 else None,
+            },
             "universe": {
                 "source": req.source,
                 "n_symbols": int(panel["close"].shape[1]),
@@ -145,6 +172,7 @@ def run_backtest(req: BacktestRequest):
                 "decay": {str(k): round(float(v), 4) for k, v in decay.items()},
                 "rank_ic_mean": round(float(ic_series(fstack, fwd5).mean()), 4),
                 "ic_by_date": ic_by_date,
+                "groups": groups_list,
             },
             "trades": run.trades.head(50).to_dict(orient="records"),
         }
@@ -184,5 +212,7 @@ def run_backtest(req: BacktestRequest):
         log.append(rec)
         payload["experiment"] = {"log_id": rec.experiment_id, "passed": passed, "unmet": unmet}
         return _clean(payload)
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"回测失败: {e}")

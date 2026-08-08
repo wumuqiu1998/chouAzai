@@ -26,7 +26,7 @@ const FIELD_LABELS: Record<string, string> = {
   limit_down_pct: "跌停幅度",
   enforce_limit: "涨跌停不可成交",
   t_plus_one: "T+1 规则",
-  metrics: "绩效指标（高级，JSON）",
+  metrics: "绩效指标",
   max_position_per_stock: "单票最大仓位",
   max_total_position: "总仓位上限",
   max_daily_turnover: "单日最大换手",
@@ -39,11 +39,19 @@ const FIELD_LABELS: Record<string, string> = {
   dev_ratio: "开发集比例",
   val_ratio: "验证集比例",
   blind_ratio: "盲测集比例",
-  walk_forward: "滚动验证（高级，JSON）",
+  walk_forward: "滚动验证",
   max_changes_per_experiment: "单次实验最大变量数",
   keep_failed_experiments: "保留失败实验",
-  pass_criteria: "通过标准（高级，JSON）",
-  failure_criteria: "失败标准（高级，JSON）",
+  pass_criteria: "通过标准",
+  failure_criteria: "失败标准",
+  train_days: "训练天数",
+  test_days: "测试天数",
+  label_horizon_days: "标签期（天）",
+  embargo_days: "隔离区（天）",
+  oos_rank_ic_positive: "样本外 RankIC 为正",
+  cost_after_return_positive: "成本后收益为正",
+  yearly_positive_ratio: "年度正收益占比",
+  max_drawdown_upper: "最大回撤上限（负数）",
   market_observation: "市场观察",
   possible_mechanism: "可能机制",
   signal_definition: "信号定义",
@@ -115,6 +123,24 @@ function ValueEditor({
   }
   if (Array.isArray(value) && value.every((v) => typeof v === "string")) {
     return <ListEditor label={label} value={value as string[]} onChange={(nv) => onChange(nv)} />;
+  }
+  if (typeof value === "object" && value !== null && !Array.isArray(value)) {
+    const obj = value as Record<string, unknown>;
+    return (
+      <div className="py-1.5">
+        <div className="mb-1 text-xs text-muted-foreground">{label}</div>
+        <div className="space-y-1 rounded-lg border border-border/50 bg-muted/20 p-2">
+          {Object.entries(obj).map(([k, v]) => (
+            <ValueEditor
+              key={k}
+              label={FIELD_LABELS[k] ?? k}
+              value={v}
+              onChange={(nv) => onChange({ ...obj, [k]: nv })}
+            />
+          ))}
+        </div>
+      </div>
+    );
   }
   const json = JSON.stringify(value, null, 2);
   return (
@@ -319,6 +345,7 @@ function BacktestPanel() {
   const chartRef = useRef<HTMLDivElement>(null);
   const yearlyRef = useRef<HTMLDivElement>(null);
   const icRef = useRef<HTMLDivElement>(null);
+  const groupRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!result || !chartRef.current) return;
@@ -416,6 +443,40 @@ function BacktestPanel() {
     };
   }, [result]);
 
+  // 分组收益（单调性）柱状图
+  useEffect(() => {
+    if (!result || !groupRef.current || result.diagnostics.groups.length === 0) return;
+    const chart = echarts.init(groupRef.current);
+    chart.setOption({
+      backgroundColor: "transparent",
+      tooltip: {
+        trigger: "axis",
+        formatter: (ps: unknown) => {
+          const p = (ps as Array<{ value: number; axisValue: string }>)[0];
+          return p ? `第 ${p.axisValue} 组：${(p.value * 100).toFixed(2)}%` : "";
+        },
+      },
+      grid: { left: 56, right: 16, top: 20, bottom: 32 },
+      xAxis: { type: "category", data: result.diagnostics.groups.map((g) => String(g.group)), axisLabel: { color: "#a8a29e" } },
+      yAxis: { type: "value", axisLabel: { color: "#a8a29e", formatter: (v: number) => `${(v * 100).toFixed(1)}%` } },
+      series: [
+        {
+          type: "bar",
+          data: result.diagnostics.groups.map((g) => ({
+            value: g.mean_ret,
+            itemStyle: { color: g.mean_ret >= 0 ? "#ef4444" : "#22c55e" },
+          })),
+        },
+      ],
+    });
+    const onResize = () => chart.resize();
+    window.addEventListener("resize", onResize);
+    return () => {
+      window.removeEventListener("resize", onResize);
+      chart.dispose();
+    };
+  }, [result]);
+
   const run = async () => {
     setRunning(true);
     setError("");
@@ -472,18 +533,22 @@ function BacktestPanel() {
           </div>
         )}
         <div>
-          <div className="mb-1 text-xs text-muted-foreground">因子</div>
-          <select
+          <div className="mb-1 text-xs text-muted-foreground">因子（可组合，逗号分隔）</div>
+          <input
+            list="factor-options"
             value={params.factor}
             onChange={(e) => setParams({ ...params, factor: e.target.value })}
-            className="rounded-md bg-muted/50 px-2 py-1.5 text-sm outline-none focus:ring-1 focus:ring-primary"
-          >
+            className="w-44 rounded-md bg-muted/50 px-2 py-1.5 text-sm outline-none focus:ring-1 focus:ring-primary"
+          />
+          <datalist id="factor-options">
             {FACTOR_OPTIONS.map(([v, label]) => (
               <option key={v} value={v}>
                 {label}
               </option>
             ))}
-          </select>
+            <option value="momentum,rsi">动量+RSI</option>
+            <option value="momentum,volume_price">动量+量价</option>
+          </datalist>
         </div>
         <div>
           <div className="mb-1 text-xs text-muted-foreground">实验假设</div>
@@ -566,6 +631,17 @@ function BacktestPanel() {
               <div className="mb-2 text-sm font-medium">IC 时间序列（RankIC by 日期）</div>
               <div ref={icRef} className="h-48 w-full" />
             </div>
+          </div>
+
+          <div className="glass mb-4 p-4">
+            <div className="mb-2 text-sm font-medium">分组收益（10 组单调性）</div>
+            {result.diagnostics.groups.length === 0 ? (
+              <p className="py-10 text-center text-sm text-muted-foreground/60">
+                样本股票数不足 10 只，无法分组（真实数据建议至少 10 只股票）
+              </p>
+            ) : (
+              <div ref={groupRef} className="h-48 w-full" />
+            )}
           </div>
 
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">

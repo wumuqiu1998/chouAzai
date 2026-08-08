@@ -54,6 +54,7 @@ export interface BacktestResponse {
     name: string;
     window: number;
     available: string[];
+    factors: string[] | null;
   };
   universe: {
     source: string;
@@ -83,6 +84,7 @@ export interface BacktestResponse {
     decay: Record<string, number | null>;
     rank_ic_mean: number | null;
     ic_by_date: [string, number][];
+    groups: Array<{ group: number; mean_ret: number; count: number }>;
   };
 }
 
