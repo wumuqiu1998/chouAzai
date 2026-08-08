@@ -85,10 +85,10 @@ def load_pack() -> PromptPack:
     if path is None:
         return RESEARCH_PACK
     if not path.is_file():
-        print(f"⚠️ prompt 包不存在，回退默认包：{path}")
+        print(f"[WARN] prompt 包不存在，回退默认包：{path}")
         return RESEARCH_PACK
     # 启动日志明示：加载的是**可执行代码**，让人一眼看见这条边界
-    print(f"⚙️ 加载本地 prompt 包（以进程权限执行，仅限可信文件）：{path}")
+    print(f"[INFO] 加载本地 prompt 包（以进程权限执行，仅限可信文件）：{path}")
     mod_name = "vibe_astock_prompts_local"
     try:
         spec = importlib.util.spec_from_file_location(mod_name, path)
@@ -106,9 +106,9 @@ def load_pack() -> PromptPack:
             raise TypeError(f"{path} 里的 PACK 不是 PromptPack 实例")
     except Exception as exc:  # noqa: BLE001  口径加载失败要吵，但不能炸掉整个系统
         sys.modules.pop(mod_name, None)
-        print(f"⚠️ prompt 包加载失败，回退默认包（{type(exc).__name__}: {exc}）")
+        print(f"[WARN] prompt 包加载失败，回退默认包（{type(exc).__name__}: {exc}）")
         return RESEARCH_PACK
-    print(f"ℹ️ 已加载本地 prompt 包：{pack.name}（{path}）")
+    print(f"[INFO] 已加载本地 prompt 包：{pack.name}（{path}）")
     return pack
 
 

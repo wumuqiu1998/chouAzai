@@ -9,6 +9,16 @@
 
 from __future__ import annotations
 
+import sys
+
+# Windows GBK 控制台打印 emoji 会抛 UnicodeEncodeError：
+# 入口统一重配为 UTF-8，并把无法编码的字符替换为 ?，保证任何模块 print 都不崩。
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError):
+        pass
+
 import json
 import os
 from pathlib import Path
@@ -59,7 +69,7 @@ try:
     duanxian_api.register(app)
 except ImportError as _dx_exc:  # noqa: F841
     import sys
-    print(f"⚠️ 短线复盘模块未完整加载（pip install -r requirements.txt）：{_dx_exc}", file=sys.stderr)
+    print(f"[WARN] 短线复盘模块未完整加载（pip install -r requirements.txt）：{_dx_exc}", file=sys.stderr)
 
 # 每半小时后台刷新持仓数据
 pf.start_scheduler(1800)
@@ -76,7 +86,7 @@ try:
     app.include_router(quant_experiments_api.router)
     app.include_router(quant_audit_api.router)
 except ImportError as _qf_exc:  # noqa: F841
-    print(f"量化研究模块未完整加载（需 pandas/pyyaml/fastapi）：{_qf_exc}", file=sys.stderr)
+    print(f"[WARN] 量化研究模块未完整加载（需 pandas/pyyaml/fastapi）：{_qf_exc}", file=sys.stderr)
 
 # CORS：默认放开（本地自托管友好）；公网部署时用 VR_ALLOW_ORIGINS 收紧成白名单。
 #   例：VR_ALLOW_ORIGINS="https://myhost"  （逗号分隔多个）

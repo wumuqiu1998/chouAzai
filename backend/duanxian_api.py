@@ -96,9 +96,9 @@ def _capture_theme_reasons() -> None:
 
         r = theme_tree.capture()
         if not r.get("ok"):
-            print(f"⚠️ 题材串囤积失败（{r.get('date')}）：{r.get('reason')}")
+            print(f"[WARN] 题材串囤积失败（{r.get('date')}）：{r.get('reason')}")
     except Exception as exc:  # noqa: BLE001
-        print(f"⚠️ 题材串囤积异常：{type(exc).__name__}: {exc}")
+        print(f"[WARN] 题材串囤积异常：{type(exc).__name__}: {exc}")
 
 
 def _run_review(date: str, job_id: str) -> None:
@@ -248,7 +248,7 @@ def api_latest(date: Optional[str] = None):
             payload["reflection"] = reflection.latest_reflection()
         payload["scoreboard"] = reflection.scoreboard()
     except Exception as exc:  # noqa: BLE001
-        print(f"⚠️ 战绩统计失败：{type(exc).__name__}: {exc}")
+        print(f"[WARN] 战绩统计失败：{type(exc).__name__}: {exc}")
     return JSONResponse(payload)
 
 
