@@ -182,3 +182,203 @@ def run_t_backtest(
         },
         "trades": trades_log,
     }
+
+
+def run_band_t_backtest(
+    code: str = "000063",
+    base_price: float = 43.0,
+    base_shares: int = 1000,
+    days: int = 20,
+    category: int = 11,
+    offset: int = 800,
+    trade_pct: float = 0.2,
+    commission: float = 0.0003,
+    stamp_duty: float = 0.0005,
+    slippage: float = 0.0001,
+    lot: int = 100,
+    min_warmup: int = 60,
+    use_beichi_filter: bool = False,
+    beichi_window: int = 24,
+    df: pd.DataFrame | None = None,
+) -> dict:
+    """中枢上下轨做T：ZD（下沿）低吸 / ZG（上沿）高抛。
+
+    因果实现：只使用截至当前 bar 的数据确认中枢与背驰；触发后下一根开盘执行；
+    当日先买后卖/先卖后买均可（T+1 只卖底仓），收盘强制回补保持底仓。
+    use_beichi_filter=True 时，只在最近确认过同向缠论买卖点后才开新仓。
+    """
+    if df is None:
+        import astock
+
+        rows = astock.kline(code, category=category, offset=offset)
+        if not rows:
+            raise ValueError("K 线数据为空")
+        df = pd.DataFrame(rows)
+        df["datetime"] = pd.to_datetime(df["datetime"])
+    df = df.sort_values("datetime").reset_index(drop=True)
+
+    all_dates = list(pd.Series(df["datetime"].dt.date).unique())
+    if len(all_dates) < days:
+        raise ValueError(f"数据不足：仅 {len(all_dates)} 个交易日，需要 {days} 天")
+    backtest_dates = all_dates[-days:]
+    backtest_set = set(backtest_dates)
+    trade_size = max(lot, (base_shares * trade_pct) // lot * lot)
+    if trade_size > base_shares:
+        trade_size = (base_shares // lot) * lot
+
+    opens = df["open"].values
+    closes = df["close"].values
+    lows = df["low"].values
+    highs = df["high"].values
+    dts = df["datetime"].values
+    last_idx_by_day = df.groupby(df["datetime"].dt.date).apply(lambda g: g.index[-1]).to_dict()
+
+    # 1) 逐 bar 因果扫描：确认中枢与背驰点，生成上下轨触发
+    triggers: list[dict] = []
+    last_buy_pos: int | None = None
+    last_sell_pos: int | None = None
+    for i in range(min_warmup, len(df) - 1):
+        cur = pd.Timestamp(dts[i])
+        exec_day = pd.Timestamp(dts[i + 1]).date()
+        if cur.date() != exec_day:
+            continue
+        if cur.date() not in backtest_set:
+            continue
+        res = analyze_chan(df.iloc[: i + 1])
+        # 记录刚被确认的背驰买卖点（点所在 bar = 上一根 bar）
+        prev_key = _dt_key(dts[i - 1])
+        for p in res["points"]:
+            if p["date"] == prev_key:
+                if p["kind"].startswith("buy"):
+                    last_buy_pos = i - 1
+                elif p["kind"].startswith("sell"):
+                    last_sell_pos = i - 1
+        # 取已完成的最近中枢（end_pos <= i-1）
+        completed = [z for z in res["zhongshu"] if z["end_pos"] <= i - 1]
+        if not completed:
+            continue
+        z = max(completed, key=lambda x: x["end_pos"])
+        if lows[i] <= z["zd"]:
+            triggers.append({"exec_i": i + 1, "day": exec_day, "side": "buy", "ref_zd": z["zd"], "ref_zg": z["zg"]})
+        elif highs[i] >= z["zg"]:
+            triggers.append({"exec_i": i + 1, "day": exec_day, "side": "sell", "ref_zd": z["zd"], "ref_zg": z["zg"]})
+
+    # 2) 逐日执行：开/平仓配对，收盘强制回补
+    t_cash = 0.0
+    fees_total = 0.0
+    trades_log: list[dict] = []
+    daily: list[dict] = []
+
+    for day in backtest_dates:
+        day_start = t_cash
+        legs: list[dict] = []  # {"dir": long/short, "price": 开仓价, "size": 手数股数}
+        day_triggers = [t for t in triggers if t["day"] == day]
+        for t in day_triggers:
+            i = t["exec_i"]
+            exec_price = float(opens[i])
+            if t["side"] == "buy":
+                # 关闭空头腿（先卖后买场景）
+                shorts = [lg for lg in legs if lg["dir"] == "short"]
+                if shorts:
+                    lg = shorts.pop(0)
+                    legs.remove(lg)
+                    px = exec_price * (1 + slippage)
+                    amount = px * trade_size
+                    fee = amount * commission
+                    t_cash -= amount + fee
+                    fees_total += fee
+                    gross = (lg["price"] - px) * trade_size
+                    trades_log.append({"date": day, "side": "buy", "kind": "close_short", "price": round(px, 3), "shares": trade_size, "paired_pnl": round(gross, 2)})
+                elif not any(lg["dir"] == "long" for lg in legs):
+                    # 开多（先买后卖场景）：背驰过滤
+                    if use_beichi_filter and (last_buy_pos is None or i - last_buy_pos > beichi_window):
+                        continue
+                    px = exec_price * (1 + slippage)
+                    amount = px * trade_size
+                    fee = amount * commission
+                    t_cash -= amount + fee
+                    fees_total += fee
+                    legs.append({"dir": "long", "price": px, "size": trade_size})
+                    trades_log.append({"date": day, "side": "buy", "kind": "open_long", "price": round(px, 3), "shares": trade_size})
+            else:
+                longs = [lg for lg in legs if lg["dir"] == "long"]
+                if longs:
+                    lg = longs.pop(0)
+                    legs.remove(lg)
+                    px = exec_price * (1 - slippage)
+                    amount = px * trade_size
+                    fee = amount * (commission + stamp_duty)
+                    t_cash += amount - fee
+                    fees_total += fee
+                    gross = (px - lg["price"]) * trade_size
+                    trades_log.append({"date": day, "side": "sell", "kind": "close_long", "price": round(px, 3), "shares": trade_size, "paired_pnl": round(gross, 2)})
+                elif not any(lg["dir"] == "short" for lg in legs):
+                    if use_beichi_filter and (last_sell_pos is None or i - last_sell_pos > beichi_window):
+                        continue
+                    px = exec_price * (1 - slippage)
+                    amount = px * trade_size
+                    fee = amount * (commission + stamp_duty)
+                    t_cash += amount - fee
+                    fees_total += fee
+                    legs.append({"dir": "short", "price": px, "size": trade_size})
+                    trades_log.append({"date": day, "side": "sell", "kind": "open_short", "price": round(px, 3), "shares": trade_size})
+
+        # 收盘强制回补，保持底仓
+        if legs:
+            last_idx = last_idx_by_day[day]
+            px = float(closes[last_idx])
+            for lg in legs:
+                if lg["dir"] == "long":
+                    sell_px = px * (1 - slippage)
+                    amount = sell_px * lg["size"]
+                    fee = amount * (commission + stamp_duty)
+                    t_cash += amount - fee
+                    fees_total += fee
+                    gross = (sell_px - lg["price"]) * lg["size"]
+                    trades_log.append({"date": day, "side": "sell", "kind": "force_close_long", "price": round(sell_px, 3), "shares": lg["size"], "paired_pnl": round(gross, 2)})
+                else:
+                    buy_px = px * (1 + slippage)
+                    amount = buy_px * lg["size"]
+                    fee = amount * commission
+                    t_cash -= amount + fee
+                    fees_total += fee
+                    gross = (lg["price"] - buy_px) * lg["size"]
+                    trades_log.append({"date": day, "side": "buy", "kind": "force_close_short", "price": round(buy_px, 3), "shares": lg["size"], "paired_pnl": round(gross, 2)})
+
+        daily.append(
+            {
+                "date": str(day),
+                "t_pnl": round(t_cash - day_start, 2),
+                "triggers": len(day_triggers),
+            }
+        )
+
+    pairs = [t for t in trades_log if "paired_pnl" in t]
+    wins = [t for t in pairs if t["paired_pnl"] > 0]
+    t_pnl = sum(d["t_pnl"] for d in daily)
+    last_close = float(closes[-1])
+    return {
+        "config": {
+            "code": code,
+            "base_price": base_price,
+            "base_shares": base_shares,
+            "days": days,
+            "category": category,
+            "trade_size": trade_size,
+            "use_beichi_filter": use_beichi_filter,
+            "beichi_window": beichi_window,
+        },
+        "period": {"start": str(backtest_dates[0]), "end": str(backtest_dates[-1]), "last_close": last_close},
+        "daily": daily,
+        "summary": {
+            "total_pairs": len(pairs),
+            "win_pairs": len(wins),
+            "win_rate": round(len(wins) / len(pairs), 4) if pairs else 0.0,
+            "t_pnl": round(t_pnl, 2),
+            "total_fees": round(fees_total, 2),
+            "positive_days": sum(1 for d in daily if d["t_pnl"] > 0),
+            "base_mtm": round(base_shares * (last_close - base_price), 2),
+            "t_pnl_per_day": round(t_pnl / len(daily), 2),
+        },
+        "trades": trades_log,
+    }
