@@ -78,6 +78,7 @@ pf.start_scheduler(1800)
 try:
     from quant_framework.api import audit_api as quant_audit_api
     from quant_framework.api import backtest_api as quant_backtest_api
+    from quant_framework.api import chan_api as quant_chan_api
     from quant_framework.api import config_api as quant_config_api
     from quant_framework.api import experiments_api as quant_experiments_api
 
@@ -85,6 +86,7 @@ try:
     app.include_router(quant_backtest_api.router)
     app.include_router(quant_experiments_api.router)
     app.include_router(quant_audit_api.router)
+    app.include_router(quant_chan_api.router)
 except ImportError as _qf_exc:  # noqa: F841
     print(f"[WARN] 量化研究模块未完整加载（需 pandas/pyyaml/fastapi）：{_qf_exc}", file=sys.stderr)
 

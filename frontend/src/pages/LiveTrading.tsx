@@ -64,6 +64,12 @@ interface MinuteData {
   points: Array<{ time: string; price: number; avg_price: number; volume: number }>;
 }
 
+interface ChanData {
+  points: Array<{ kind: string; date: string; price: number; note: string }>;
+  zhongshu: Array<{ start_date: string; end_date: string; zd: number; zg: number }>;
+  bi: Array<{ date: string; price: number; kind: string }>;
+}
+
 const color = (v: number | undefined | null) =>
   v == null ? "text-muted-foreground" : v > 0 ? "text-danger" : v < 0 ? "text-success" : "text-muted-foreground";
 const pct = (v: number | undefined | null) => (v == null ? "—" : `${v > 0 ? "+" : ""}${v.toFixed(2)}%`);
@@ -113,6 +119,14 @@ async function fetchMinute(code: string): Promise<MinuteData> {
   const j = (await resp.json()) as { data?: MinuteData };
   if (!j.data) throw new Error("分时暂无数据");
   return j.data;
+}
+
+async function fetchChan(code: string, category: number): Promise<ChanData> {
+  const resp = await fetch(`/api/quant/chan/analyze?code=${code}&category=${category}&offset=120`, {
+    headers: authHeaders(),
+  });
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  return (await resp.json()) as ChanData;
 }
 
 function IndexCard({ name, price, change_pct }: IndexQuote) {
@@ -197,6 +211,9 @@ function KLineModal({
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<echarts.ECharts | null>(null);
   const cacheRef = useRef<Record<string, { bars?: Array<Record<string, unknown>>; minute?: MinuteData }>>({});
+  const chanCacheRef = useRef<Record<string, ChanData>>({});
+  const [chanOn, setChanOn] = useState(true);
+  const [chanData, setChanData] = useState<ChanData | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -251,6 +268,31 @@ function KLineModal({
       cancelled = true;
     };
   }, [code, tab, reload]);
+
+  // 缠论结构（买卖点/中枢/笔）
+  useEffect(() => {
+    if (!chanOn || tab === "minute") {
+      setChanData(null);
+      return;
+    }
+    let cancelled = false;
+    const key = `${code}-${tab}`;
+    const cached = chanCacheRef.current[key];
+    if (cached) {
+      setChanData(cached);
+      return;
+    }
+    fetchChan(code, Number(tab))
+      .then((d) => {
+        if (cancelled) return;
+        chanCacheRef.current[key] = d;
+        setChanData(d);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [chanOn, code, tab]);
 
   // 盘中自动刷新：交易时段每 15 秒重拉当前周期数据，涨幅/图表实时更新
   useEffect(() => {
@@ -318,6 +360,75 @@ function KLineModal({
     const chgColor = chg == null ? "#a8a29e" : chg >= 0 ? "#ef4444" : "#22c55e";
     const pc = prevClose ?? prevBar?.c ?? null;
     const withPc = data.map((b, i) => ({ ...b, pc: i > 0 ? data[i - 1].c : pc ?? b.c }));
+    const legendData = ["K线", "MA5", "MA10", "MA20", "MA60", "成交量"];
+    const extraSeries: object[] = [];
+    if (chanOn && chanData && (chanData.points.length > 0 || chanData.bi.length > 0)) {
+      const idxOf = new Map(data.map((b, i) => [b.date.slice(0, 16), i]));
+      const biLine = chanData.bi
+        .map((b) => {
+          const i = idxOf.get(b.date);
+          return i === undefined ? null : [i, b.price];
+        })
+        .filter((v): v is [number, number] => v !== null);
+      if (biLine.length >= 2) {
+        extraSeries.push({
+          name: "笔",
+          type: "line",
+          data: biLine,
+          showSymbol: false,
+          lineStyle: { width: 1, color: "#f59e0b", opacity: 0.85 },
+          z: 2,
+        });
+      }
+      const marker = (kindPrefix: string, color: string, label: string) => {
+        const items = chanData.points
+          .filter((p) => p.kind.startsWith(kindPrefix))
+          .map((p) => {
+            const i = idxOf.get(p.date);
+            return i === undefined ? null : { value: [i, p.price], name: p.kind.toUpperCase() };
+          })
+          .filter((v) => v !== null);
+        if (items.length === 0) return;
+        extraSeries.push({
+          name: label,
+          type: "scatter",
+          data: items,
+          symbol: "pin",
+          symbolSize: 16,
+          itemStyle: { color },
+          label: {
+            show: true,
+            position: "top",
+            color,
+            fontSize: 10,
+            fontWeight: 600,
+            formatter: (p: unknown) => (p as { name: string }).name,
+          },
+          z: 5,
+        });
+      };
+      marker("buy", "#ef4444", "买点");
+      marker("sell", "#3b82f6", "卖点");
+      if (chanData.zhongshu.length > 0) {
+        const areas = chanData.zhongshu
+          .map((z) => {
+            const s = idxOf.get(z.start_date);
+            const e = idxOf.get(z.end_date);
+            return s === undefined || e === undefined ? null : [{ xAxis: s, yAxis: z.zd }, { xAxis: e, yAxis: z.zg }];
+          })
+          .filter((v) => v !== null);
+        if (areas.length > 0) {
+          extraSeries.push({
+            name: "中枢",
+            type: "line",
+            data: [],
+            markArea: { silent: true, itemStyle: { color: "rgba(96,165,250,.12)" }, data: areas },
+            z: 1,
+          });
+        }
+      }
+      legendData.push("买点", "卖点", "笔", "中枢");
+    }
     // K线（分钟/日/周/月）常跨多天：Y 轴按可见数据自适应（scale:true），
     // 不再按“当天范围”钳制，否则历史K线会被压扁/裁掉。涨跌停虚线保留在真实价位。
     chart.clear();
@@ -339,7 +450,7 @@ function KLineModal({
           return `${b.date}<br/>开 ${b.o.toFixed(2)}　收 ${b.c.toFixed(2)}<br/>高 ${b.h.toFixed(2)}　低 ${b.l.toFixed(2)}<br/>涨跌幅 <span style="color:${col}">${chgPct >= 0 ? "+" : ""}${chgPct.toFixed(2)}%</span><br/>${mas}<br/>量 ${fmt(b.v)}`;
         },
       },
-      legend: { data: ["K线", "MA5", "MA10", "MA20", "MA60", "成交量"], textStyle: { color: "#a8a29e" }, top: 0 },
+      legend: { data: legendData, textStyle: { color: "#a8a29e" }, top: 0 },
       graphic: [
         {
           type: "text",
@@ -403,9 +514,10 @@ function KLineModal({
             itemStyle: { color: b.c >= b.o ? "rgba(239,68,68,.55)" : "rgba(34,197,94,.55)" },
           })),
         },
+        ...extraSeries,
       ],
     });
-  }, [tab, bars, prevClose]);
+  }, [tab, bars, prevClose, chanOn, chanData]);
 
   // 分时 option
   useEffect(() => {
@@ -583,6 +695,16 @@ function KLineModal({
               </button>
             ))}
           </div>
+          <button
+            onClick={() => setChanOn((v) => !v)}
+            className={cn(
+              "ml-2 rounded-md px-2 py-1 text-xs",
+              chanOn ? "bg-warning/15 font-medium text-warning" : "bg-muted/40 text-muted-foreground hover:text-foreground",
+            )}
+            title="缠论买卖点/中枢/笔（简化口径）"
+          >
+            缠论{chanOn ? "开" : "关"}
+          </button>
           <button onClick={onClose} className="ml-auto text-muted-foreground hover:text-foreground" title="关闭">
             <X className="h-4 w-4" />
           </button>
