@@ -1,6 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import * as echarts from "echarts";
-import { FlaskConical, Play, RefreshCw, Save, ScrollText, Settings2, X } from "lucide-react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import { FlaskConical, Play, RefreshCw, Save, ScrollText, Settings2, ShieldCheck, X } from "lucide-react";
+import { authHeaders } from "@/lib/api";
+import { isCliProvider } from "@/lib/ai-models";
+import { chatStream, loadLlm, type LlmConfig } from "@/lib/llm";
 import { cn } from "@/lib/utils";
 import { quantApi, type BacktestResponse, type ExperimentRow } from "@/lib/quant";
 
@@ -76,7 +81,9 @@ const SOURCE_LABELS: Record<string, string> = {
   real: "真实A股",
 };
 
-type Tab = "config" | "backtest" | "experiments";
+type Tab = "config" | "backtest" | "experiments" | "audit";
+
+let lastBacktest: { code: string; data: string; result: string } | null = null;
 
 function ValueEditor({
   label,
@@ -481,7 +488,13 @@ function BacktestPanel() {
     setRunning(true);
     setError("");
     try {
-      setResult(await quantApi.runBacktest(params));
+      const res = await quantApi.runBacktest(params);
+      setResult(res);
+      lastBacktest = {
+        code: `${FACTOR_LABELS[res.factor.name] ?? res.factor.name}(${res.factor.window})`,
+        data: `数据源 ${SOURCE_LABELS[res.universe.source] ?? res.universe.source}，${res.universe.n_symbols} 只，${res.universe.start} ~ ${res.universe.end}；固定回测底座（佣金/印花税/滑点/整手/T+1，T+1 开盘成交，Top${params.top_n}）`,
+        result: JSON.stringify({ metrics: res.metrics, diagnostics: res.diagnostics }, null, 2),
+      };
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -773,10 +786,197 @@ function ExperimentsPanel() {
   );
 }
 
+async function runAuditApi(llm: LlmConfig, prompt: string, onDelta: (t: string) => void): Promise<void> {
+  const base = (llm.baseURL || "").replace(/\/+$/, "");
+  if (!base) throw new Error("未配置 Base URL");
+  const resp = await fetch(`${base}/chat/completions`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${llm.apiKey}` },
+    body: JSON.stringify({
+      model: llm.model,
+      stream: true,
+      messages: [
+        {
+          role: "system",
+          content:
+            "你是一名严格的量化策略审计员。只依据给出的策略代码、数据口径和回测结果做证伪分析，不调用任何工具，不客套，直接按“风险等级/具体证据/需要追加的实验/可能的修复方式”输出。",
+        },
+        { role: "user", content: prompt },
+      ],
+    }),
+  });
+  if (!resp.ok || !resp.body) {
+    const text = await resp.text().catch(() => "");
+    throw new Error(`LLM 调用失败 HTTP ${resp.status} ${text.slice(0, 120)}`);
+  }
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = "";
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    const lines = buf.split("\n");
+    buf = lines.pop() ?? "";
+    for (const line of lines) {
+      const t = line.trim();
+      if (!t.startsWith("data:")) continue;
+      const payload = t.slice(5).trim();
+      if (!payload || payload === "[DONE]") continue;
+      try {
+        const j = JSON.parse(payload) as { choices?: Array<{ delta?: { content?: string } }> };
+        const delta = j.choices?.[0]?.delta?.content;
+        if (delta) onDelta(delta);
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+}
+
+async function fetchAuditPrompt(code: string, dataSpec: string, resultText: string): Promise<string> {
+  const resp = await fetch("/api/quant/audit/prompt", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify({ strategy_code: code, data_spec: dataSpec, backtest_result: resultText }),
+  });
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  const j = (await resp.json()) as { prompt?: string };
+  if (!j.prompt) throw new Error("未生成 Prompt");
+  return j.prompt;
+}
+
+function AuditPanel() {
+  const [code, setCode] = useState("");
+  const [dataSpec, setDataSpec] = useState("");
+  const [resultText, setResultText] = useState("");
+  const [prompt, setPrompt] = useState("");
+  const [output, setOutput] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [checklist, setChecklist] = useState<string[]>([]);
+
+  useEffect(() => {
+    quantApi
+      .auditChecklist()
+      .then((r) => setChecklist(r.items))
+      .catch(() => {});
+  }, []);
+
+  const fetchPrompt = async (): Promise<string> => {
+    return fetchAuditPrompt(code, dataSpec, resultText);
+  };
+
+  const run = async () => {
+    const llm = loadLlm();
+    if (!llm) {
+      setError("未接入 AI：请先在「接入 AI」页配置模型（API key 或订阅 CLI）");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    setOutput("");
+    try {
+      const p = prompt || (await fetchPrompt());
+      setPrompt(p);
+      if (isCliProvider(llm.provider)) {
+        await chatStream([{ role: "user", content: p }], "", {
+          onDelta: (t) => setOutput((o) => o + t),
+        });
+      } else {
+        await runAuditApi(llm, p, (t) => setOutput((o) => o + t));
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const inputCls = "w-full rounded-md bg-muted/50 px-2 py-1.5 text-xs outline-none focus:ring-1 focus:ring-primary";
+
+  return (
+    <div>
+      <div className="mb-3 text-xs text-muted-foreground">
+        让另一个 AI 证明策略可能是假的：不给它"策略很优秀"的上下文，只提供代码、数据口径和回测结果。
+      </div>
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <div className="glass p-4">
+          <div className="mb-1 text-xs text-muted-foreground">策略代码 / 因子实现</div>
+          <textarea value={code} onChange={(e) => setCode(e.target.value)} rows={5} className={inputCls} />
+          <div className="mb-1 mt-2 text-xs text-muted-foreground">数据口径</div>
+          <input value={dataSpec} onChange={(e) => setDataSpec(e.target.value)} className={inputCls} />
+          <div className="mb-1 mt-2 text-xs text-muted-foreground">回测结果</div>
+          <textarea value={resultText} onChange={(e) => setResultText(e.target.value)} rows={5} className={`${inputCls} font-mono`} />
+          <div className="mt-2 flex flex-wrap gap-2">
+            <button
+              onClick={() => {
+                if (lastBacktest) {
+                  setCode(lastBacktest.code);
+                  setDataSpec(lastBacktest.data);
+                  setResultText(lastBacktest.result);
+                }
+              }}
+              className="rounded-lg bg-muted/50 px-3 py-1.5 text-xs hover:bg-muted"
+            >
+              填入上次回测
+            </button>
+            <button
+              onClick={async () => {
+                try {
+                  setPrompt(await fetchPrompt());
+                } catch (e) {
+                  setError(e instanceof Error ? e.message : String(e));
+                }
+              }}
+              className="rounded-lg bg-muted/50 px-3 py-1.5 text-xs hover:bg-muted"
+            >
+              生成 Prompt
+            </button>
+            <button
+              onClick={() => void run()}
+              disabled={busy}
+              className="rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
+            >
+              {busy ? "审计中…" : "运行对抗审计"}
+            </button>
+          </div>
+          {error && <div className="mt-2 text-xs text-danger">{error}</div>}
+        </div>
+        <div className="glass p-4">
+          <div className="mb-1 text-xs text-muted-foreground">审计 Prompt（可编辑）</div>
+          <textarea value={prompt} onChange={(e) => setPrompt(e.target.value)} rows={6} className={`${inputCls} font-mono`} />
+          <div className="mb-1 mt-2 text-xs text-muted-foreground">审计输出（流式）</div>
+          <div className="max-h-80 min-h-32 overflow-auto rounded-lg bg-black/20 p-3 text-xs">
+            {busy && !output ? (
+              <span className="text-muted-foreground">思考中…</span>
+            ) : (
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>{output || "等待运行…"}</ReactMarkdown>
+            )}
+          </div>
+        </div>
+      </div>
+      {checklist.length > 0 && (
+        <div className="glass mt-4 p-4">
+          <div className="mb-2 text-sm font-medium">审计检查清单（{checklist.length} 项）</div>
+          <div className="flex flex-wrap gap-1.5">
+            {checklist.map((c) => (
+              <span key={c} className="rounded bg-muted/40 px-2 py-0.5 text-xs">
+                {c}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 const TABS: Array<{ id: Tab; label: string; icon: React.ReactNode }> = [
   { id: "config", label: "配置管理", icon: <Settings2 size={15} /> },
   { id: "backtest", label: "回测与诊断", icon: <FlaskConical size={15} /> },
   { id: "experiments", label: "实验日志", icon: <ScrollText size={15} /> },
+  { id: "audit", label: "对抗审计", icon: <ShieldCheck size={15} /> },
 ];
 
 export function QuantResearch() {
@@ -807,6 +1007,7 @@ export function QuantResearch() {
       {tab === "config" && <ConfigPanel />}
       {tab === "backtest" && <BacktestPanel />}
       {tab === "experiments" && <ExperimentsPanel />}
+      {tab === "audit" && <AuditPanel />}
     </div>
   );
 }

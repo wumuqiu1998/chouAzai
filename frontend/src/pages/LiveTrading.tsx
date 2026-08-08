@@ -5,6 +5,7 @@ import {
   AlertTriangle,
   ArrowDownRight,
   ArrowUpRight,
+  Bell,
   Globe2,
   LineChart,
   Newspaper,
@@ -69,11 +70,19 @@ const pct = (v: number | undefined | null) => (v == null ? "—" : `${v > 0 ? "+
 const fmt = (v: number | null | undefined) => (v == null ? "—" : v.toLocaleString("zh-CN", { maximumFractionDigits: 2 }));
 
 const LIVE_KEY = "vr-live-on";
+const ALERT_KEY = "vr-alert-on";
 const loadLive = () => {
   try {
     return localStorage.getItem(LIVE_KEY) !== "off";
   } catch {
     return true;
+  }
+};
+const loadAlert = () => {
+  try {
+    return localStorage.getItem(ALERT_KEY) === "on";
+  } catch {
+    return false;
   }
 };
 
@@ -624,13 +633,27 @@ function KLineModal({
   );
 }
 
+// 涨跌停判断：优先用行情接口的涨跌停价，缺失时回退到涨跌幅阈值
+function limitState(q: Quote | undefined): "up" | "down" | null {
+  if (!q) return null;
+  if (q.limit_up && q.limit_up > 0 && q.price >= q.limit_up * 0.999) return "up";
+  if (q.limit_down && q.limit_down > 0 && q.price <= q.limit_down * 1.001) return "down";
+  if (q.change_pct >= 9.8) return "up";
+  if (q.change_pct <= -9.8) return "down";
+  return null;
+}
+
 export function LiveTrading() {
   const [codes, setCodes] = useState<string[]>(loadWatch);
   const [input, setInput] = useState("");
   const [hint, setHint] = useState<string | null>(null);
   const [live, setLive] = useState(loadLive);
+  const [alertOn, setAlertOn] = useState(loadAlert);
   const [sel, setSel] = useState<{ code: string; name: string } | null>(null);
   const [newsTab, setNewsTab] = useState<"headlines" | "radar">("headlines");
+  const [alertList, setAlertList] = useState<Array<{ id: string; msg: string }>>([]);
+  const prevQuotesRef = useRef<Record<string, Quote>>({});
+  const alertedRef = useRef<Record<string, boolean>>({});
 
   const { quotes, loading, updatedAt: quoteAt, error: quoteError, refresh: refreshQuotes } = useLiveQuotes(codes, live);
   const { data, error, updatedAt, polling, refresh } = usePolling<LiveSnapshot>(fetchSnapshot, 5000, live, true);
@@ -647,6 +670,55 @@ export function LiveTrading() {
       return next;
     });
   };
+
+  const toggleAlert = () => {
+    const next = !alertOn;
+    setAlertOn(next);
+    try {
+      localStorage.setItem(ALERT_KEY, next ? "on" : "off");
+    } catch {
+      /* ignore */
+    }
+    if (next && "Notification" in window && Notification.permission === "default") {
+      void Notification.requestPermission();
+    }
+  };
+
+  // 异动/涨跌停提醒：仅当条件从无到有时通知一次，条件解除后重新武装
+  useEffect(() => {
+    if (!alertOn) {
+      prevQuotesRef.current = quotes;
+      return;
+    }
+    const prev = prevQuotesRef.current;
+    for (const c of codes) {
+      const q = quotes[c];
+      const p = prev[c];
+      if (!q || !p) continue;
+      const lim = limitState(q);
+      const moved = Math.abs(q.change_pct) >= 5;
+      const newlyLim = lim !== null && limitState(p) === null;
+      const newlyMoved = moved && Math.abs(p.change_pct) < 5;
+      if (alertedRef.current[c]) {
+        if (!moved && lim === null) alertedRef.current[c] = false;
+        continue;
+      }
+      if (newlyLim || newlyMoved) {
+        alertedRef.current[c] = true;
+        const kind = lim ? (lim === "up" ? "涨停" : "跌停") : "异动";
+        const msg = `${q.name}(${c}) ${kind} 现价 ${q.price} 涨幅 ${pct(q.change_pct)}`;
+        setAlertList((l) => [{ id: `${c}-${Date.now()}`, msg }, ...l].slice(0, 5));
+        if ("Notification" in window && Notification.permission === "granted") {
+          try {
+            new Notification(`自选提醒 · ${q.name}`, { body: msg });
+          } catch {
+            /* ignore */
+          }
+        }
+      }
+    }
+    prevQuotesRef.current = quotes;
+  }, [quotes, codes, alertOn]);
 
   const add = () => {
     const { next, added } = addCodes(codes, input);
@@ -667,7 +739,6 @@ export function LiveTrading() {
   };
 
   const bigMove = (q: Quote | undefined) => q && Math.abs(q.change_pct) >= 5;
-  const limitHit = (q: Quote | undefined) => q && (q.change_pct >= 9.8 || q.change_pct <= -9.8);
   const emotion = data?.emotion;
   const overview = data?.overview;
   const portfolio = data?.portfolio;
@@ -697,6 +768,19 @@ export function LiveTrading() {
                 <span className={cn("relative inline-flex h-2 w-2 rounded-full", live ? "bg-primary" : "bg-muted-foreground/40")} />
               </span>
               自动刷新
+            </button>
+            <button
+              onClick={toggleAlert}
+              title={alertOn ? "关闭异动/涨跌停提醒" : "开启异动/涨跌停提醒（需允许浏览器通知）"}
+              className={cn(
+                "inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs transition-colors",
+                alertOn
+                  ? "border-warning/50 bg-warning/10 text-warning"
+                  : "border-border/60 text-muted-foreground hover:text-foreground",
+              )}
+            >
+              <Bell className="h-3.5 w-3.5" />
+              提醒
             </button>
             <button
               onClick={() => {
@@ -729,6 +813,23 @@ export function LiveTrading() {
       {error && (
         <div className="mb-4 flex items-center gap-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning">
           <AlertTriangle className="h-3.5 w-3.5" /> {error}
+        </div>
+      )}
+
+      {alertList.length > 0 && (
+        <div className="mb-4 space-y-1.5">
+          {alertList.map((a) => (
+            <div
+              key={a.id}
+              className="flex items-center gap-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-1.5 text-xs text-warning"
+            >
+              <Bell className="h-3.5 w-3.5 shrink-0" />
+              <span className="flex-1">{a.msg}</span>
+              <button onClick={() => setAlertList((l) => l.filter((x) => x.id !== a.id))} className="text-muted-foreground hover:text-foreground">
+                <X className="h-3 w-3" />
+              </button>
+            </div>
+          ))}
         </div>
       )}
 
@@ -794,7 +895,7 @@ export function LiveTrading() {
                       className={cn(
                         "border-b border-border/30",
                         bigMove(q) && "bg-primary/10",
-                        limitHit(q) && "animate-pulse",
+                        limitState(q) !== null && "animate-pulse",
                       )}
                     >
                       <td className="px-2 py-2 font-medium">
@@ -809,8 +910,8 @@ export function LiveTrading() {
                       <td className={cn("px-2 py-2 font-mono", color(q?.change_pct))}>{q ? q.price : "—"}</td>
                       <td className={cn("px-2 py-2 font-mono", color(q?.change_pct))}>
                         {q ? pct(q.change_pct) : "—"}
-                        {limitHit(q) &&
-                          (q.change_pct >= 9.8 ? (
+                        {limitState(q) &&
+                          (limitState(q) === "up" ? (
                             <ArrowUpRight className="ml-1 inline h-3 w-3" />
                           ) : (
                             <ArrowDownRight className="ml-1 inline h-3 w-3" />
