@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+from pathlib import Path
 
 # 可选 .env：backend/.env 存在则加载（已 export 的变量优先）——对应 .env.example 的用法说明。
 # 放在本地模块 import 之前，保证各模块 import 期读到的环境变量已就位。
@@ -26,6 +27,7 @@ if os.path.exists(_ENV_FILE):
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 import astock
@@ -824,3 +826,21 @@ def live_snapshot():
     except Exception:  # noqa: BLE001
         pass
     return out
+
+
+# ---------------------------------------------------------------------------
+# 生产托管：前端构建产物（frontend/dist）由本服务直接提供，单进程即完整应用。
+# 开发模式仍推荐 vite dev（:5899），此处仅作为交付/部署形态。
+# ---------------------------------------------------------------------------
+_FRONTEND_DIST = Path(__file__).resolve().parent.parent / "frontend" / "dist"
+if _FRONTEND_DIST.exists() and (_FRONTEND_DIST / "index.html").exists():
+    app.mount("/assets", StaticFiles(directory=str(_FRONTEND_DIST / "assets")), name="frontend-assets")
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    def _spa_fallback(full_path: str):
+        if full_path.startswith("api/"):
+            return JSONResponse({"detail": "Not Found"}, status_code=404)
+        index = _FRONTEND_DIST / "index.html"
+        if index.exists():
+            return FileResponse(str(index))
+        return JSONResponse({"detail": "frontend not built"}, status_code=404)

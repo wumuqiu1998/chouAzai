@@ -45,6 +45,22 @@ export interface ConfigResponse {
 }
 
 export interface BacktestResponse {
+  experiment: {
+    log_id: string;
+    passed: boolean;
+    unmet: string[];
+  } | null;
+  factor: {
+    name: string;
+    window: number;
+    available: string[];
+  };
+  universe: {
+    source: string;
+    n_symbols: number;
+    start: string;
+    end: string;
+  };
   metrics: {
     annual_return: number | null;
     max_drawdown: number | null;
@@ -66,6 +82,7 @@ export interface BacktestResponse {
     monotonicity: { monotonic: boolean; spearman: number | null; top_minus_bottom: number | null };
     decay: Record<string, number | null>;
     rank_ic_mean: number | null;
+    ic_by_date: [string, number][];
   };
 }
 
@@ -88,10 +105,14 @@ export const quantApi = {
   saveConfig: (name: string, data: Record<string, unknown>) =>
     request<ConfigResponse>(`/config/${name}`, "PUT", { data }),
   runBacktest: (params: {
+    source: string;
+    codes: string;
+    factor: string;
+    hypothesis: string;
+    window: number;
     n_symbols: number;
     n_days: number;
     seed: number;
-    window: number;
     top_n: number;
   }) => request<BacktestResponse>("/backtest/run", "POST", params),
   experiments: () => request<{ total: number; success_rate: number; rows: ExperimentRow[] }>("/experiments"),

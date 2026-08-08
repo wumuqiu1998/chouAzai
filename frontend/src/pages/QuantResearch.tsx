@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import * as echarts from "echarts";
-import { FlaskConical, Play, RefreshCw, Save, ScrollText, Settings2 } from "lucide-react";
+import { FlaskConical, Play, RefreshCw, Save, ScrollText, Settings2, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { quantApi, type BacktestResponse, type ExperimentRow } from "@/lib/quant";
 
@@ -10,6 +10,62 @@ const CONFIG_LABELS: Record<string, string> = {
   risk: "硬性风控",
   protocol: "实验协议",
   hypothesis: "研究假设卡",
+};
+
+const FIELD_LABELS: Record<string, string> = {
+  initial_cash: "初始资金",
+  commission_rate: "佣金率",
+  stamp_duty_rate: "印花税率（卖出）",
+  slippage: "滑点",
+  lot_size: "每手股数",
+  fill_price: "成交价格模式",
+  rebalance_freq_days: "调仓频率（交易日）",
+  holding_period_days: "持有周期（交易日）",
+  top_n: "持仓只数",
+  limit_up_pct: "涨停幅度",
+  limit_down_pct: "跌停幅度",
+  enforce_limit: "涨跌停不可成交",
+  t_plus_one: "T+1 规则",
+  metrics: "绩效指标（高级，JSON）",
+  max_position_per_stock: "单票最大仓位",
+  max_total_position: "总仓位上限",
+  max_daily_turnover: "单日最大换手",
+  max_daily_loss: "单日最大亏损",
+  max_order_amount: "单笔最大金额",
+  price_sanity_band: "价格异动检查幅度",
+  max_duplicate_orders: "重复下单次数上限",
+  disconnect_guard: "数据断线保护",
+  emergency_stop: "紧急停止交易",
+  dev_ratio: "开发集比例",
+  val_ratio: "验证集比例",
+  blind_ratio: "盲测集比例",
+  walk_forward: "滚动验证（高级，JSON）",
+  max_changes_per_experiment: "单次实验最大变量数",
+  keep_failed_experiments: "保留失败实验",
+  pass_criteria: "通过标准（高级，JSON）",
+  failure_criteria: "失败标准（高级，JSON）",
+  market_observation: "市场观察",
+  possible_mechanism: "可能机制",
+  signal_definition: "信号定义",
+  data_timing: "数据时间",
+  prediction_target: "预测目标",
+  benchmarks: "基准",
+  confounders: "混杂变量",
+};
+
+const FACTOR_LABELS: Record<string, string> = {
+  momentum: "动量",
+  ma_bias: "均线乖离",
+  rsi: "RSI",
+  macd: "MACD柱",
+  volatility: "波动率",
+  volume_surge: "量能异动",
+  volume_price: "量价配合",
+};
+
+const SOURCE_LABELS: Record<string, string> = {
+  synthetic: "合成数据",
+  real: "真实A股",
 };
 
 type Tab = "config" | "backtest" | "experiments";
@@ -57,6 +113,9 @@ function ValueEditor({
       </div>
     );
   }
+  if (Array.isArray(value) && value.every((v) => typeof v === "string")) {
+    return <ListEditor label={label} value={value as string[]} onChange={(nv) => onChange(nv)} />;
+  }
   const json = JSON.stringify(value, null, 2);
   return (
     <div className="py-1.5">
@@ -73,6 +132,64 @@ function ValueEditor({
         rows={Math.min(10, Math.max(3, json.split("\n").length))}
         className="w-full rounded-md bg-muted/50 px-2 py-1.5 font-mono text-xs outline-none focus:ring-1 focus:ring-primary"
       />
+    </div>
+  );
+}
+
+function ListEditor({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: string[];
+  onChange: (v: string[]) => void;
+}) {
+  const [text, setText] = useState("");
+  return (
+    <div className="py-1.5">
+      <div className="mb-1 text-xs text-muted-foreground">{label}</div>
+      <div className="mb-1.5 flex flex-wrap gap-1.5">
+        {value.map((item, i) => (
+          <span key={`${item}-${i}`} className="inline-flex items-center gap-1 rounded bg-muted/40 px-2 py-0.5 text-xs">
+            {item}
+            <button
+              onClick={() => onChange(value.filter((_, j) => j !== i))}
+              className="text-muted-foreground hover:text-danger"
+              title="删除"
+            >
+              <X className="h-3 w-3" />
+            </button>
+          </span>
+        ))}
+      </div>
+      <div className="flex gap-1.5">
+        <input
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              if (text.trim()) {
+                onChange([...value, text.trim()]);
+                setText("");
+              }
+            }
+          }}
+          placeholder="输入一项后回车添加"
+          className="flex-1 rounded bg-muted/50 px-2 py-1 text-xs outline-none focus:ring-1 focus:ring-primary"
+        />
+        <button
+          onClick={() => {
+            if (text.trim()) {
+              onChange([...value, text.trim()]);
+              setText("");
+            }
+          }}
+          className="rounded bg-primary/15 px-2 text-xs text-primary hover:bg-primary/25"
+        >
+          添加
+        </button>
+      </div>
     </div>
   );
 }
@@ -151,7 +268,7 @@ function ConfigPanel() {
         ) : (
           <div className="grid grid-cols-1 gap-x-6 sm:grid-cols-2">
             {Object.entries(draft).map(([k, v]) => (
-              <ValueEditor key={k} label={k} value={v} onChange={(nv) => setDraft({ ...draft, [k]: nv })} />
+              <ValueEditor key={k} label={FIELD_LABELS[k] ?? k} value={v} onChange={(nv) => setDraft({ ...draft, [k]: nv })} />
             ))}
           </div>
         )}
@@ -185,11 +302,23 @@ function MetricCard({ label, value, fmt }: { label: string; value: number | null
 }
 
 function BacktestPanel() {
-  const [params, setParams] = useState({ n_symbols: 60, n_days: 400, seed: 42, window: 20, top_n: 20 });
+  const [params, setParams] = useState({
+    source: "synthetic",
+    codes: "600519,000858,300750,601318,600036,000333,002594,688981,600887,000001",
+    factor: "momentum",
+    hypothesis: "动量策略实验",
+    n_symbols: 60,
+    n_days: 400,
+    seed: 42,
+    window: 20,
+    top_n: 20,
+  });
   const [result, setResult] = useState<BacktestResponse | null>(null);
   const [error, setError] = useState("");
   const [running, setRunning] = useState(false);
   const chartRef = useRef<HTMLDivElement>(null);
+  const yearlyRef = useRef<HTMLDivElement>(null);
+  const icRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!result || !chartRef.current) return;
@@ -220,6 +349,73 @@ function BacktestPanel() {
     };
   }, [result]);
 
+  // 分年度收益柱状图
+  useEffect(() => {
+    if (!result || !yearlyRef.current) return;
+    const years = Object.entries(result.metrics.yearly);
+    if (years.length === 0) return;
+    const chart = echarts.init(yearlyRef.current);
+    chart.setOption({
+      backgroundColor: "transparent",
+      tooltip: {
+        trigger: "axis",
+        formatter: (ps: unknown) => {
+          const p = (ps as Array<{ value: number; axisValue: string }>)[0];
+          return p ? `${p.axisValue} 年：${(p.value * 100).toFixed(2)}%` : "";
+        },
+      },
+      grid: { left: 56, right: 16, top: 20, bottom: 32 },
+      xAxis: { type: "category", data: years.map(([y]) => y), axisLabel: { color: "#a8a29e" } },
+      yAxis: { type: "value", axisLabel: { color: "#a8a29e", formatter: (v: number) => `${(v * 100).toFixed(0)}%` } },
+      series: [
+        {
+          type: "bar",
+          data: years.map(([, v]) => ({
+            value: v,
+            itemStyle: { color: (v as number) >= 0 ? "#ef4444" : "#22c55e" },
+          })),
+        },
+      ],
+    });
+    const onResize = () => chart.resize();
+    window.addEventListener("resize", onResize);
+    return () => {
+      window.removeEventListener("resize", onResize);
+      chart.dispose();
+    };
+  }, [result]);
+
+  // IC 时间序列
+  useEffect(() => {
+    if (!result || !icRef.current || result.diagnostics.ic_by_date.length === 0) return;
+    const chart = echarts.init(icRef.current);
+    chart.setOption({
+      backgroundColor: "transparent",
+      tooltip: { trigger: "axis" },
+      grid: { left: 56, right: 16, top: 20, bottom: 32 },
+      xAxis: {
+        type: "category",
+        data: result.diagnostics.ic_by_date.map(([d]) => d),
+        axisLabel: { color: "#a8a29e", interval: Math.max(0, Math.floor(result.diagnostics.ic_by_date.length / 8)) },
+      },
+      yAxis: { type: "value", axisLabel: { color: "#a8a29e" } },
+      series: [
+        {
+          type: "line",
+          data: result.diagnostics.ic_by_date.map(([, v]) => v),
+          showSymbol: false,
+          lineStyle: { color: "#60a5fa", width: 1.5 },
+        },
+      ],
+    });
+    const onResize = () => chart.resize();
+    window.addEventListener("resize", onResize);
+    return () => {
+      window.removeEventListener("resize", onResize);
+      chart.dispose();
+    };
+  }, [result]);
+
   const run = async () => {
     setRunning(true);
     setError("");
@@ -234,18 +430,70 @@ function BacktestPanel() {
 
   const num = (v: number | null) => (v === null ? "—" : `${(v * 100).toFixed(2)}%`);
   const m = result?.metrics;
-  const fields: Array<[keyof typeof params, string]> = [
-    ["n_symbols", "股票数"],
-    ["n_days", "交易日"],
-    ["seed", "随机种子"],
-    ["window", "动量窗口"],
-    ["top_n", "持仓只数"],
+  const fields: Array<{ key: "n_symbols" | "n_days" | "seed" | "window" | "top_n"; label: string }> = [
+    { key: "n_symbols", label: "股票数" },
+    { key: "n_days", label: "交易日" },
+    { key: "seed", label: "随机种子" },
+    { key: "window", label: "因子参数(窗口)" },
+    { key: "top_n", label: "持仓只数" },
+  ];
+  const FACTOR_OPTIONS: Array<[string, string]> = [
+    ["momentum", "动量"],
+    ["ma_bias", "均线乖离"],
+    ["rsi", "RSI"],
+    ["macd", "MACD柱"],
+    ["volatility", "波动率"],
+    ["volume_surge", "量能异动"],
+    ["volume_price", "量价配合"],
   ];
 
   return (
     <div>
       <div className="glass mb-4 flex flex-wrap items-end gap-3 p-4">
-        {fields.map(([key, label]) => (
+        <div>
+          <div className="mb-1 text-xs text-muted-foreground">数据源</div>
+          <select
+            value={params.source}
+            onChange={(e) => setParams({ ...params, source: e.target.value })}
+            className="rounded-md bg-muted/50 px-2 py-1.5 text-sm outline-none focus:ring-1 focus:ring-primary"
+          >
+            <option value="synthetic">合成数据</option>
+            <option value="real">真实A股</option>
+          </select>
+        </div>
+        {params.source === "real" && (
+          <div>
+            <div className="mb-1 text-xs text-muted-foreground">股票代码（逗号分隔）</div>
+            <input
+              value={params.codes}
+              onChange={(e) => setParams({ ...params, codes: e.target.value })}
+              className="w-72 rounded-md bg-muted/50 px-2 py-1.5 text-sm outline-none focus:ring-1 focus:ring-primary"
+            />
+          </div>
+        )}
+        <div>
+          <div className="mb-1 text-xs text-muted-foreground">因子</div>
+          <select
+            value={params.factor}
+            onChange={(e) => setParams({ ...params, factor: e.target.value })}
+            className="rounded-md bg-muted/50 px-2 py-1.5 text-sm outline-none focus:ring-1 focus:ring-primary"
+          >
+            {FACTOR_OPTIONS.map(([v, label]) => (
+              <option key={v} value={v}>
+                {label}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <div className="mb-1 text-xs text-muted-foreground">实验假设</div>
+          <input
+            value={params.hypothesis}
+            onChange={(e) => setParams({ ...params, hypothesis: e.target.value })}
+            className="w-40 rounded-md bg-muted/50 px-2 py-1.5 text-sm outline-none focus:ring-1 focus:ring-primary"
+          />
+        </div>
+        {fields.map(({ key, label }) => (
           <div key={key}>
             <div className="mb-1 text-xs text-muted-foreground">{label}</div>
             <input
@@ -271,6 +519,24 @@ function BacktestPanel() {
 
       {m && (
         <>
+          {result?.experiment && (
+            <div
+              className={cn(
+                "mb-3 rounded-lg border px-3 py-2 text-sm",
+                result.experiment.passed
+                  ? "border-success/30 bg-success/10 text-success"
+                  : "border-danger/30 bg-danger/10 text-danger",
+              )}
+            >
+              {result.experiment.passed
+                ? `实验通过 ✓（记录 ${result.experiment.log_id}）`
+                : `实验未通过 ✗：${result.experiment.unmet.join("；") || "未满足协议标准"}（记录 ${result.experiment.log_id}）`}
+            </div>
+          )}
+          <div className="mb-3 text-xs text-muted-foreground">
+            {result?.universe &&
+              `样本：${result.universe.n_symbols} 只 · ${result.universe.start} ~ ${result.universe.end} · 因子 ${FACTOR_LABELS[result.factor.name] ?? result.factor.name}(${result.factor.window}) · 数据源 ${SOURCE_LABELS[result.universe.source] ?? result.universe.source}`}
+          </div>
           <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
             <MetricCard label="年化收益" value={m.annual_return} fmt={num} />
             <MetricCard label="最大回撤" value={m.max_drawdown} fmt={num} />
@@ -289,6 +555,17 @@ function BacktestPanel() {
           <div className="glass mb-4 p-4">
             <div className="mb-2 text-sm font-medium">净值曲线</div>
             <div ref={chartRef} className="h-72 w-full" />
+          </div>
+
+          <div className="mb-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
+            <div className="glass p-4">
+              <div className="mb-2 text-sm font-medium">分年度收益</div>
+              <div ref={yearlyRef} className="h-48 w-full" />
+            </div>
+            <div className="glass p-4">
+              <div className="mb-2 text-sm font-medium">IC 时间序列（RankIC by 日期）</div>
+              <div ref={icRef} className="h-48 w-full" />
+            </div>
           </div>
 
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">

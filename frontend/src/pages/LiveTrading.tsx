@@ -155,6 +155,17 @@ function parseBars(bars: Array<Record<string, unknown>>) {
     .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
 }
 
+function movingAverage(values: number[], period: number): Array<number | null> {
+  const out: Array<number | null> = [];
+  let sum = 0;
+  for (let i = 0; i < values.length; i++) {
+    sum += values[i];
+    if (i >= period) sum -= values[i - period];
+    out.push(i >= period - 1 ? sum / period : null);
+  }
+  return out;
+}
+
 function KLineModal({
   code,
   name,
@@ -296,43 +307,10 @@ function KLineModal({
     const chg = prevBar ? ((lastBar.c - prevBar.c) / prevBar.c) * 100 : null;
     const chgStr = chg == null ? "" : `涨幅 ${chg > 0 ? "+" : ""}${chg.toFixed(2)}%`;
     const chgColor = chg == null ? "#a8a29e" : chg >= 0 ? "#ef4444" : "#22c55e";
-    const limitPct = limitPctFor(code, name);
     const pc = prevClose ?? prevBar?.c ?? null;
-    const applyLimits = pc != null && pc > 0 && !["5", "6"].includes(tab);
-    const dayBars = data.filter((b) => b.date.slice(0, 10) === lastBar.date.slice(0, 10));
-    const dayHigh = dayBars.length ? Math.max(...dayBars.map((b) => b.h)) : lastBar.h;
-    const dayLow = dayBars.length ? Math.min(...dayBars.map((b) => b.l)) : lastBar.l;
     const withPc = data.map((b, i) => ({ ...b, pc: i > 0 ? data[i - 1].c : pc ?? b.c }));
-    // 上下限按“当天实际涨跌幅度”自适应：行情小则放大显示，不强制 ±涨跌停
-    let lo: number | undefined;
-    let hi: number | undefined;
-    if (applyLimits) {
-      const dayRange = Math.max((dayHigh - pc) / pc, (pc - dayLow) / pc);
-      const maxMove = Math.max(dayRange, 0.005);
-      lo = pc * (1 - maxMove * 1.08);
-      hi = pc * (1 + maxMove * 1.08);
-    }
-    const yAxes: object[] = [
-      {
-        scale: !applyLimits,
-        ...(applyLimits ? { min: lo, max: hi } : {}),
-        axisLabel: { color: "#a8a29e" },
-        splitLine: { lineStyle: { type: "dashed", color: "rgba(255,255,255,.07)" } },
-      },
-      { gridIndex: 1, axisLabel: { color: "#a8a29e" }, splitLine: { lineStyle: { type: "dashed", color: "rgba(255,255,255,.05)" } } },
-    ];
-    if (applyLimits) {
-      yAxes.push({
-        gridIndex: 0,
-        position: "right",
-        min: lo,
-        max: hi,
-        splitLine: { show: false },
-        axisLine: { show: false },
-        axisTick: { show: false },
-        axisLabel: { color: "#a8a29e", formatter: (v: number) => `${((v / pc - 1) * 100).toFixed(1)}%` },
-      });
-    }
+    // K线（分钟/日/周/月）常跨多天：Y 轴按可见数据自适应（scale:true），
+    // 不再按“当天范围”钳制，否则历史K线会被压扁/裁掉。涨跌停虚线保留在真实价位。
     chart.clear();
     chart.setOption({
       backgroundColor: "transparent",
@@ -340,15 +318,19 @@ function KLineModal({
         trigger: "axis",
         axisPointer: { type: "cross" },
         formatter: (params: unknown) => {
-          const list = params as Array<{ dataIndex: number }>;
+          const list = params as Array<{ dataIndex: number; seriesName?: string; value?: unknown }>;
           const b = withPc[list[0]?.dataIndex ?? 0];
           if (!b) return "";
           const chgPct = b.pc ? ((b.c - b.pc) / b.pc) * 100 : 0;
           const col = chgPct >= 0 ? "#ef4444" : "#22c55e";
-          return `${b.date}<br/>开 ${b.o.toFixed(2)}　收 ${b.c.toFixed(2)}<br/>高 ${b.h.toFixed(2)}　低 ${b.l.toFixed(2)}<br/>涨跌幅 <span style="color:${col}">${chgPct >= 0 ? "+" : ""}${chgPct.toFixed(2)}%</span><br/>量 ${fmt(b.v)}`;
+          const mas = list
+            .filter((p) => typeof p.seriesName === "string" && p.seriesName.startsWith("MA"))
+            .map((p) => `${p.seriesName} ${p.value == null ? "—" : Number(p.value).toFixed(2)}`)
+            .join("　");
+          return `${b.date}<br/>开 ${b.o.toFixed(2)}　收 ${b.c.toFixed(2)}<br/>高 ${b.h.toFixed(2)}　低 ${b.l.toFixed(2)}<br/>涨跌幅 <span style="color:${col}">${chgPct >= 0 ? "+" : ""}${chgPct.toFixed(2)}%</span><br/>${mas}<br/>量 ${fmt(b.v)}`;
         },
       },
-      legend: { data: ["K线", "成交量"], textStyle: { color: "#a8a29e" }, top: 0 },
+      legend: { data: ["K线", "MA5", "MA10", "MA20", "MA60", "成交量"], textStyle: { color: "#a8a29e" }, top: 0 },
       graphic: [
         {
           type: "text",
@@ -358,14 +340,25 @@ function KLineModal({
         },
       ],
       grid: [
-        { left: 56, right: applyLimits ? 72 : 16, top: 28, height: "56%" },
+        { left: 56, right: 16, top: 28, height: "56%" },
         { left: 56, right: 16, top: "72%", height: "18%" },
       ],
       xAxis: [
         { type: "category", data: data.map((b) => b.date), axisLabel: { color: "#a8a29e" } },
         { type: "category", gridIndex: 1, data: data.map((b) => b.date), axisLabel: { show: false } },
       ],
-      yAxis: yAxes,
+      yAxis: [
+        {
+          scale: true,
+          axisLabel: { color: "#a8a29e" },
+          splitLine: { lineStyle: { type: "dashed", color: "rgba(255,255,255,.07)" } },
+        },
+        {
+          gridIndex: 1,
+          axisLabel: { color: "#a8a29e" },
+          splitLine: { lineStyle: { type: "dashed", color: "rgba(255,255,255,.05)" } },
+        },
+      ],
       dataZoom: [
         { type: "inside", xAxisIndex: [0, 1] },
         { type: "slider", xAxisIndex: [0, 1], bottom: 0, height: 14 },
@@ -376,28 +369,21 @@ function KLineModal({
           type: "candlestick",
           data: data.map((b) => [b.o, b.c, b.l, b.h]),
           itemStyle: { color: "#ef4444", color0: "#22c55e", borderColor: "#ef4444", borderColor0: "#22c55e" },
-          ...(applyLimits
-            ? {
-                markLine: {
-                  symbol: "none",
-                  silent: true,
-                  lineStyle: { type: "dashed" },
-                  data: [
-                    {
-                      yAxis: pc * (1 + limitPct),
-                      lineStyle: { color: "rgba(239,68,68,.7)", type: "dashed", width: 1.5 },
-                      label: { color: "#ef4444", formatter: `涨停 +${(limitPct * 100).toFixed(0)}%` },
-                    },
-                    {
-                      yAxis: pc * (1 - limitPct),
-                      lineStyle: { color: "rgba(34,197,94,.7)", type: "dashed", width: 1.5 },
-                      label: { color: "#22c55e", formatter: `跌停 -${(limitPct * 100).toFixed(0)}%` },
-                    },
-                  ],
-                },
-              }
-            : {}),
         },
+        ...[
+          [5, "MA5", "#f5f5f4"],
+          [10, "MA10", "#fbbf24"],
+          [20, "MA20", "#c084fc"],
+          [60, "MA60", "#34d399"],
+        ].map(([period, maName, maColor]) => ({
+          name: maName as string,
+          type: "line" as const,
+          data: movingAverage(data.map((b) => b.c), period as number),
+          showSymbol: false,
+          lineStyle: { width: 1, color: maColor as string },
+          emphasis: { disabled: true },
+          z: 2,
+        })),
         {
           name: "成交量",
           type: "bar",
