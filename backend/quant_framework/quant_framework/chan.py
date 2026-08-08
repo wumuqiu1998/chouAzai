@@ -134,16 +134,19 @@ def _bi_force(bis: list[dict], idx: int) -> float:
     return abs(bis[idx]["price"] - bis[idx - 1]["price"])
 
 
-def buy_sell_points(bis: list[dict], zhongshu: list[dict]) -> list[dict]:
-    """三类买卖点（简化场景推导）。"""
-    pts: list[dict] = []
-    seen_kinds: set[str] = set()
+def buy_sell_points(bis: list[dict], zhongshu: list[dict], min_same_kind_gap: int = 20) -> list[dict]:
+    """三类买卖点（简化场景推导）。
 
-    def add(kind: str, date: str, price: float, note: str) -> None:
-        # 简化口径：每类买卖点只保留最早出现的一个，避免重叠中枢重复标注
-        if kind in seen_kinds:
+    min_same_kind_gap：同一类买卖点（如 buy1）之间至少间隔多少根合并 K 线，
+    既允许一段长行情中出现多个同类型点，又过滤重叠中枢产生的紧邻重复点。
+    """
+    pts: list[dict] = []
+    last_pos: dict[str, int] = {}
+
+    def add(kind: str, date: str, price: float, note: str, pos: int) -> None:
+        if kind in last_pos and pos - last_pos[kind] < min_same_kind_gap:
             return
-        seen_kinds.add(kind)
+        last_pos[kind] = pos
         pts.append({"kind": kind, "date": date, "price": round(price, 4), "note": note})
 
     for z in zhongshu:
@@ -160,43 +163,43 @@ def buy_sell_points(bis: list[dict], zhongshu: list[dict]) -> list[dict]:
 
         # 一买：向下离开中枢、跌破 ZD、力度弱于进入段（背驰）
         if leave_down and leave_bi["price"] < z["zd"] and leave_force < enter_force:
-            add("buy1", leave_bi["date"], leave_bi["price"], "下跌背驰，中枢跌破后的一买")
+            add("buy1", leave_bi["date"], leave_bi["price"], "下跌背驰，中枢跌破后的一买", leave_bi["pos"])
             # 二买：一买之后的回调低点（高于一买价）
             for b in bis[end_idx + 2 :]:
                 if b["kind"] == "bottom" and b["price"] > leave_bi["price"]:
-                    add("buy2", b["date"], b["price"], "一买后回调不创新低（二买）")
+                    add("buy2", b["date"], b["price"], "一买后回调不创新低（二买）", b["pos"])
                     break
         # 一卖：向上离开中枢、突破 ZG、力度弱于进入段
         elif not leave_down and leave_bi["price"] > z["zg"] and leave_force < enter_force:
-            add("sell1", leave_bi["date"], leave_bi["price"], "上涨背驰，中枢突破后的一卖")
+            add("sell1", leave_bi["date"], leave_bi["price"], "上涨背驰，中枢突破后的一卖", leave_bi["pos"])
             for b in bis[end_idx + 2 :]:
                 if b["kind"] == "top" and b["price"] < leave_bi["price"]:
-                    add("sell2", b["date"], b["price"], "一卖后反弹不创新高（二卖）")
+                    add("sell2", b["date"], b["price"], "一卖后反弹不创新高（二卖）", b["pos"])
                     break
 
         # 三买：向上离开中枢后，回抽不破 ZG
         if leave_bi["price"] > z["zg"] and not leave_down:
             for b in bis[end_idx + 2 :]:
                 if b["kind"] == "bottom" and b["price"] > z["zg"]:
-                    add("buy3", b["date"], b["price"], "离开中枢后回抽不破 ZG（三买）")
+                    add("buy3", b["date"], b["price"], "离开中枢后回抽不破 ZG（三买）", b["pos"])
                     break
         # 三卖：向下离开中枢后，回抽不破 ZD
         if leave_bi["price"] < z["zd"] and leave_down:
             for b in bis[end_idx + 2 :]:
                 if b["kind"] == "top" and b["price"] < z["zd"]:
-                    add("sell3", b["date"], b["price"], "离开中枢后回抽不破 ZD（三卖）")
+                    add("sell3", b["date"], b["price"], "离开中枢后回抽不破 ZD（三卖）", b["pos"])
                     break
     return pts
 
 
-def analyze_chan(df: pd.DataFrame, min_gap: int = 4) -> dict:
+def analyze_chan(df: pd.DataFrame, min_gap: int = 4, min_same_kind_gap: int = 20) -> dict:
     """对 OHLC DataFrame 做缠论分析，返回 bars/points/zhongshu/bi。"""
     df = df.sort_values("datetime").reset_index(drop=True)
     merged = merge_contained(df)
     fractals = find_fractals(merged)
     bis = find_bi(fractals, min_gap=min_gap)
     zhongshu = find_zhongshu(bis)
-    points = buy_sell_points(bis, zhongshu)
+    points = buy_sell_points(bis, zhongshu, min_same_kind_gap=min_same_kind_gap)
     return {
         "bars": [
             {
@@ -212,5 +215,5 @@ def analyze_chan(df: pd.DataFrame, min_gap: int = 4) -> dict:
         "points": points,
         "zhongshu": zhongshu,
         "bi": bis,
-        "params": {"min_gap": min_gap},
+        "params": {"min_gap": min_gap, "min_same_kind_gap": min_same_kind_gap},
     }

@@ -98,3 +98,25 @@ def test_analyze_chan_structure():
     assert len(res["bars"]) == n
     for p in res["points"]:
         assert p["kind"] in {"buy1", "buy2", "buy3", "sell1", "sell2", "sell3"}
+
+
+def test_multiple_same_kind_points_allowed_when_far_apart():
+    bis = [
+        {"pos": 0, "date": "2026-01-01", "price": 110, "kind": "top"},
+        {"pos": 5, "date": "2026-01-06", "price": 90, "kind": "bottom"},
+        {"pos": 10, "date": "2026-01-11", "price": 100, "kind": "top"},
+        {"pos": 15, "date": "2026-01-16", "price": 92, "kind": "bottom"},
+        {"pos": 20, "date": "2026-01-21", "price": 96, "kind": "top"},
+        {"pos": 25, "date": "2026-01-26", "price": 85, "kind": "bottom"},
+        {"pos": 30, "date": "2026-01-31", "price": 94, "kind": "top"},
+        {"pos": 35, "date": "2026-02-05", "price": 88, "kind": "bottom"},
+        {"pos": 40, "date": "2026-02-10", "price": 98, "kind": "top"},
+        {"pos": 45, "date": "2026-02-15", "price": 97, "kind": "bottom"},
+    ]
+    zhongshu = find_zhongshu(bis)
+    # gap=0：允许同一类点多次出现
+    pts0 = buy_sell_points(bis, zhongshu, min_same_kind_gap=0)
+    assert sum(1 for p in pts0 if p["kind"] == "buy1") >= 2
+    # 默认 gap=20：紧邻的重复点被过滤
+    pts20 = buy_sell_points(bis, zhongshu, min_same_kind_gap=20)
+    assert sum(1 for p in pts20 if p["kind"] == "buy1") == 1

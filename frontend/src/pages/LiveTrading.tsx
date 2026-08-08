@@ -106,8 +106,8 @@ async function fetchRadar(): Promise<RadarData> {
   return j.data;
 }
 
-async function fetchKline(code: string, category: number): Promise<Array<Record<string, unknown>>> {
-  const resp = await fetch(`/api/kline?code=${code}&category=${category}&offset=120`, { headers: authHeaders() });
+async function fetchKline(code: string, category: number, offset: number): Promise<Array<Record<string, unknown>>> {
+  const resp = await fetch(`/api/kline?code=${code}&category=${category}&offset=${offset}`, { headers: authHeaders() });
   if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
   const j = (await resp.json()) as { data?: Array<Record<string, unknown>> };
   return (j.data ?? []) as Array<Record<string, unknown>>;
@@ -121,8 +121,8 @@ async function fetchMinute(code: string): Promise<MinuteData> {
   return j.data;
 }
 
-async function fetchChan(code: string, category: number): Promise<ChanData> {
-  const resp = await fetch(`/api/quant/chan/analyze?code=${code}&category=${category}&offset=120`, {
+async function fetchChan(code: string, category: number, offset: number): Promise<ChanData> {
+  const resp = await fetch(`/api/quant/chan/analyze?code=${code}&category=${category}&offset=${offset}`, {
     headers: authHeaders(),
   });
   if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
@@ -214,6 +214,7 @@ function KLineModal({
   const chanCacheRef = useRef<Record<string, ChanData>>({});
   const [chanOn, setChanOn] = useState(true);
   const [chanData, setChanData] = useState<ChanData | null>(null);
+  const [barCount, setBarCount] = useState(250);
 
   useEffect(() => {
     let cancelled = false;
@@ -241,16 +242,19 @@ function KLineModal({
         });
     } else {
       const category = Number(tab);
-      const cached = cacheRef.current[code]?.bars;
+      const cached = cacheRef.current[`${code}-${tab}-${barCount}`]?.bars;
       if (cached) {
         setBars(cached);
         setLoading(false);
         return;
       }
-      fetchKline(code, category)
+      fetchKline(code, category, barCount)
         .then((rows) => {
           if (cancelled) return;
-          cacheRef.current[code] = { ...cacheRef.current[code], bars: rows };
+          cacheRef.current[`${code}-${tab}-${barCount}`] = {
+            ...cacheRef.current[`${code}-${tab}-${barCount}`],
+            bars: rows,
+          };
           setBars(rows);
           // 顺带取昨收，用于涨跌停上下限
           fetchMinute(code)
@@ -267,7 +271,7 @@ function KLineModal({
     return () => {
       cancelled = true;
     };
-  }, [code, tab, reload]);
+  }, [code, tab, reload, barCount]);
 
   // 缠论结构（买卖点/中枢/笔）
   useEffect(() => {
@@ -276,13 +280,13 @@ function KLineModal({
       return;
     }
     let cancelled = false;
-    const key = `${code}-${tab}`;
+    const key = `${code}-${tab}-${barCount}`;
     const cached = chanCacheRef.current[key];
     if (cached) {
       setChanData(cached);
       return;
     }
-    fetchChan(code, Number(tab))
+    fetchChan(code, Number(tab), barCount)
       .then((d) => {
         if (cancelled) return;
         chanCacheRef.current[key] = d;
@@ -292,7 +296,7 @@ function KLineModal({
     return () => {
       cancelled = true;
     };
-  }, [chanOn, code, tab]);
+  }, [chanOn, code, tab, barCount]);
 
   // 盘中自动刷新：交易时段每 15 秒重拉当前周期数据，涨幅/图表实时更新
   useEffect(() => {
@@ -313,9 +317,12 @@ function KLineModal({
             setPrevClose((p) => p ?? d.prev_close);
           }
         } else {
-          const rows = await fetchKline(code, Number(tab));
+          const rows = await fetchKline(code, Number(tab), barCount);
           if (!cancelled) {
-            cacheRef.current[code] = { ...cacheRef.current[code], bars: rows };
+            cacheRef.current[`${code}-${tab}-${barCount}`] = {
+              ...cacheRef.current[`${code}-${tab}-${barCount}`],
+              bars: rows,
+            };
             setBars(rows);
           }
         }
@@ -329,7 +336,7 @@ function KLineModal({
       cancelled = true;
       if (timer !== null) window.clearTimeout(timer);
     };
-  }, [code, tab]);
+  }, [code, tab, barCount]);
 
   // 初始化 chart 实例（容器常驻，只创建一次）
   useEffect(() => {
@@ -380,12 +387,18 @@ function KLineModal({
           z: 2,
         });
       }
-      const marker = (kindPrefix: string, color: string, label: string) => {
+      const chartRange =
+        Math.max(...data.map((b) => b.h)) - Math.min(...data.map((b) => b.l));
+      const marker = (kindPrefix: string, color: string, label: string, isBuy: boolean) => {
         const items = chanData.points
           .filter((p) => p.kind.startsWith(kindPrefix))
           .map((p) => {
             const i = idxOf.get(p.date);
-            return i === undefined ? null : { value: [i, p.price], name: p.kind.toUpperCase() };
+            if (i === undefined) return null;
+            const bar = data[i];
+            const gap = chartRange * 0.025;
+            const y = isBuy ? bar.l - gap : bar.h + gap;
+            return { value: [i, y], name: p.kind.toUpperCase() };
           })
           .filter((v) => v !== null);
         if (items.length === 0) return;
@@ -393,22 +406,34 @@ function KLineModal({
           name: label,
           type: "scatter",
           data: items,
-          symbol: "pin",
-          symbolSize: 16,
-          itemStyle: { color },
+          symbol: "triangle",
+          symbolSize: 14,
+          symbolRotate: isBuy ? 0 : 180,
+          itemStyle: { color, borderColor: "#ffffff", borderWidth: 1 },
           label: {
             show: true,
-            position: "top",
+            position: isBuy ? "bottom" : "top",
             color,
-            fontSize: 10,
-            fontWeight: 600,
+            fontSize: 11,
+            fontWeight: 700,
+            backgroundColor: "rgba(0,0,0,.6)",
+            padding: [2, 4],
+            borderRadius: 3,
             formatter: (p: unknown) => (p as { name: string }).name,
           },
-          z: 5,
+          tooltip: {
+            show: true,
+            formatter: (p: unknown) => {
+              const name = (p as { name?: string }).name ?? "";
+              const pt = chanData.points.find((x) => x.kind.toUpperCase() === name);
+              return pt ? `<b>${name}</b>（${pt.date}）<br/>${pt.note}` : "";
+            },
+          },
+          z: 6,
         });
       };
-      marker("buy", "#ef4444", "买点");
-      marker("sell", "#3b82f6", "卖点");
+      marker("buy", "#ef4444", "买点", true);
+      marker("sell", "#3b82f6", "卖点", false);
       if (chanData.zhongshu.length > 0) {
         const areas = chanData.zhongshu
           .map((z) => {
@@ -674,6 +699,22 @@ function KLineModal({
     </span>
   );
 
+  // 点击 BS 点：把图定位（缩放）到该点附近
+  const locate = (date: string) => {
+    const chart = chartRef.current;
+    if (!chart) return;
+    const list = parseBars(bars);
+    const idx = list.findIndex((b) => b.date.slice(0, 16) === date);
+    if (idx < 0 || list.length === 0) return;
+    const windowSize = Math.max(30, Math.floor(list.length / 5));
+    const start = Math.max(0, Math.min(idx - Math.floor(windowSize / 2), list.length - windowSize));
+    chart.dispatchAction({
+      type: "dataZoom",
+      startValue: list[start].date,
+      endValue: list[Math.min(start + windowSize, list.length - 1)].date,
+    });
+  };
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm" onClick={onClose}>
       <div className="glass flex h-[72vh] w-[min(92vw,860px)] flex-col p-4" onClick={(e) => e.stopPropagation()}>
@@ -705,6 +746,16 @@ function KLineModal({
           >
             缠论{chanOn ? "开" : "关"}
           </button>
+          <select
+            value={barCount}
+            onChange={(e) => setBarCount(Number(e.target.value))}
+            className="ml-1 rounded-md bg-muted/40 px-1.5 py-1 text-xs text-muted-foreground outline-none hover:text-foreground"
+            title="K 线数量（最多 800 根）"
+          >
+            <option value={250}>250根</option>
+            <option value={500}>500根</option>
+            <option value={800}>800根</option>
+          </select>
           <button onClick={onClose} className="ml-auto text-muted-foreground hover:text-foreground" title="关闭">
             <X className="h-4 w-4" />
           </button>
@@ -723,6 +774,28 @@ function KLineModal({
           {statItem("昨收", statPrev ?? "—")}
           {statItem("量", statVol == null ? "—" : fmt(statVol))}
         </div>
+        {chanOn && chanData && chanData.points.length > 0 && (
+          <div className="mb-2 flex max-h-16 flex-wrap gap-1.5 overflow-auto">
+            {chanData.points.map((p) => {
+              const isBuy = p.kind.startsWith("buy");
+              return (
+                <button
+                  key={`${p.kind}-${p.date}`}
+                  onClick={() => locate(p.date)}
+                  title={`点击定位：${p.note}`}
+                  className={cn(
+                    "rounded border px-2 py-0.5 text-[11px] font-semibold transition-colors",
+                    isBuy
+                      ? "border-danger/40 bg-danger/10 text-danger hover:bg-danger/20"
+                      : "border-blue-400/40 bg-blue-400/10 text-blue-400 hover:bg-blue-400/20",
+                  )}
+                >
+                  {p.kind.toUpperCase()} {p.date.slice(5)} {p.price.toFixed(2)}
+                </button>
+              );
+            })}
+          </div>
+        )}
         <div className="relative min-h-0 flex-1">
           {/* 容器常驻，仅在无数据时隐藏，避免 chart 实例被卸载 */}
           <div ref={containerRef} className="absolute inset-0" style={{ visibility: hasData ? "visible" : "hidden" }} />
