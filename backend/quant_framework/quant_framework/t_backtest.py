@@ -199,6 +199,9 @@ def run_band_t_backtest(
     min_warmup: int = 60,
     use_beichi_filter: bool = False,
     beichi_window: int = 24,
+    vp_shrink_ratio: float = 0.0,
+    vp_surge_ratio: float = 0.0,
+    vol_window: int = 20,
     df: pd.DataFrame | None = None,
 ) -> dict:
     """中枢上下轨做T：ZD（下沿）低吸 / ZG（上沿）高抛。
@@ -231,6 +234,8 @@ def run_band_t_backtest(
     lows = df["low"].values
     highs = df["high"].values
     dts = df["datetime"].values
+    vols = df["volume"].values
+    avg_vol = df["volume"].rolling(vol_window, min_periods=vol_window).mean().values
     last_idx_by_day = df.groupby(df["datetime"].dt.date).apply(lambda g: g.index[-1]).to_dict()
 
     # 1) 逐 bar 因果扫描：确认中枢与背驰点，生成上下轨触发
@@ -258,9 +263,11 @@ def run_band_t_backtest(
         if not completed:
             continue
         z = max(completed, key=lambda x: x["end_pos"])
-        if lows[i] <= z["zd"]:
+        vol_ok_buy = vp_shrink_ratio <= 0 or (vols[i] <= avg_vol[i] * vp_shrink_ratio)
+        vol_ok_sell = vp_surge_ratio <= 0 or (vols[i] >= avg_vol[i] * vp_surge_ratio)
+        if lows[i] <= z["zd"] and vol_ok_buy:
             triggers.append({"exec_i": i + 1, "day": exec_day, "side": "buy", "ref_zd": z["zd"], "ref_zg": z["zg"]})
-        elif highs[i] >= z["zg"]:
+        elif highs[i] >= z["zg"] and vol_ok_sell:
             triggers.append({"exec_i": i + 1, "day": exec_day, "side": "sell", "ref_zd": z["zd"], "ref_zg": z["zg"]})
 
     # 2) 逐日执行：开/平仓配对，收盘强制回补
@@ -367,6 +374,9 @@ def run_band_t_backtest(
             "trade_size": trade_size,
             "use_beichi_filter": use_beichi_filter,
             "beichi_window": beichi_window,
+            "vp_shrink_ratio": vp_shrink_ratio,
+            "vp_surge_ratio": vp_surge_ratio,
+            "vol_window": vol_window,
         },
         "period": {"start": str(backtest_dates[0]), "end": str(backtest_dates[-1]), "last_close": last_close},
         "daily": daily,

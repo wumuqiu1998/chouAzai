@@ -57,3 +57,16 @@ def test_band_t_backtest_runs():
         res = run_band_t_backtest(base_price=43.0, base_shares=1000, days=20, category=11, offset=800, df=df, use_beichi_filter=filt)
         assert len(res["daily"]) == 20
         assert res["summary"]["t_pnl"] is not None
+
+    # 量价确认模式也能正常运行
+    res_vp = run_band_t_backtest(
+        base_price=43.0,
+        base_shares=1000,
+        days=20,
+        category=11,
+        offset=800,
+        df=df,
+        vp_shrink_ratio=0.85,
+        vp_surge_ratio=1.15,
+    )
+    assert len(res_vp["daily"]) == 20
