@@ -1234,19 +1234,19 @@ function KLineModal({
                     {
                       yAxis: dayRefData.ref_bar.high,
                       lineStyle: { color: "rgba(251,191,36,.7)", type: "dashed", width: 1 },
-                      label: { color: "#fbbf24", formatter: `昨高 ${dayRefData.ref_bar.high}` },
+                      label: { color: "#fbbf24", formatter: `昨高 ${dayRefData.ref_bar.high.toFixed(2)}` },
                     },
                     {
                       yAxis: dayRefData.ref_bar.low,
                       lineStyle: { color: "rgba(52,211,153,.7)", type: "dashed", width: 1 },
-                      label: { color: "#34d399", formatter: `昨低 ${dayRefData.ref_bar.low}` },
+                      label: { color: "#34d399", formatter: `昨低 ${dayRefData.ref_bar.low.toFixed(2)}` },
                     },
                     ...(dayRefData.atr.upper != null
                       ? [
                           {
                             yAxis: dayRefData.atr.upper,
                             lineStyle: { color: "rgba(249,115,22,.65)", type: "dashed", width: 1 },
-                            label: { color: "#f97316", formatter: `ATR上 ${dayRefData.atr.upper}` },
+                            label: { color: "#f97316", formatter: `ATR上 ${dayRefData.atr.upper.toFixed(2)}` },
                           },
                         ]
                       : []),
@@ -1255,7 +1255,7 @@ function KLineModal({
                           {
                             yAxis: dayRefData.atr.lower,
                             lineStyle: { color: "rgba(6,182,212,.65)", type: "dashed", width: 1 },
-                            label: { color: "#06b6d4", formatter: `ATR下 ${dayRefData.atr.lower}` },
+                            label: { color: "#06b6d4", formatter: `ATR下 ${dayRefData.atr.lower.toFixed(2)}` },
                           },
                         ]
                       : []),
@@ -1263,12 +1263,12 @@ function KLineModal({
                       {
                         yAxis: z.zd,
                         lineStyle: { color: "rgba(96,165,250,.6)", type: "dotted", width: 1 },
-                        label: { color: "#60a5fa", formatter: `中枢下 ${z.zd}` },
+                        label: { color: "#60a5fa", formatter: `中枢下 ${z.zd.toFixed(2)}` },
                       },
                       {
                         yAxis: z.zg,
                         lineStyle: { color: "rgba(96,165,250,.6)", type: "dotted", width: 1 },
-                        label: { color: "#60a5fa", formatter: `中枢上 ${z.zg}` },
+                        label: { color: "#60a5fa", formatter: `中枢上 ${z.zg.toFixed(2)}` },
                       },
                     ])),
                     ...dayRefData.chan_points.slice(-4).map((p) => ({
@@ -1280,7 +1280,7 @@ function KLineModal({
                       },
                       label: {
                         color: p.kind.startsWith("buy") ? "#ef4444" : "#3b82f6",
-                        formatter: `${p.kind.toUpperCase()} ${p.price}`,
+                        formatter: `${p.kind.toUpperCase()} ${p.price.toFixed(2)}`,
                       },
                     })),
                   ]
@@ -1289,7 +1289,7 @@ function KLineModal({
                 ? minuteSignals.recent.slice(-6).map((s) => ({
                     yAxis: s.price,
                     lineStyle: { color: "rgba(168,162,158,.4)", type: "dotted", width: 1 },
-                    label: { color: "#a8a29e", formatter: `${s.label} ${s.price}` },
+                    label: { color: "#a8a29e", formatter: `${s.label} ${s.price.toFixed(2)}` },
                   }))
                 : []),
             ],

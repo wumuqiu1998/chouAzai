@@ -60,16 +60,16 @@ def _intraday_signals(df: pd.DataFrame) -> list[dict]:
     out: list[dict] = []
     for s in compute_atr(df)["signals"]:
         if s["kind"] == "top":
-            out.append({"time": _time_of(s["date"]), "label": "顶", "kind": "atr_top", "price": s["price"], "note": s["note"]})
+            out.append({"time": _time_of(s["date"]), "label": "顶", "kind": "atr_top", "price": round(s["price"], 2), "note": s["note"]})
         elif s["kind"] == "bottom":
-            out.append({"time": _time_of(s["date"]), "label": "底", "kind": "atr_bottom", "price": s["price"], "note": s["note"]})
+            out.append({"time": _time_of(s["date"]), "label": "底", "kind": "atr_bottom", "price": round(s["price"], 2), "note": s["note"]})
     for p in analyze_chan(df)["points"]:
         label = _CHAN_LABEL.get(p["kind"])
         if label:
-            out.append({"time": _time_of(p["date"]), "label": label, "kind": p["kind"], "price": p["price"], "note": p["note"]})
+            out.append({"time": _time_of(p["date"]), "label": label, "kind": p["kind"], "price": round(p["price"], 2), "note": p["note"]})
     smc = analyze_smc(df)
     for s in smc.get("sweeps", []) or []:
-        out.append({"time": _time_of(s["date"]), "label": "扫", "kind": "sweep", "price": s["price"], "note": s["note"]})
+        out.append({"time": _time_of(s["date"]), "label": "扫", "kind": "sweep", "price": round(s["price"], 2), "note": s["note"]})
     st = smc.get("structure") or {}
     bos = st.get("last_bos")
     if bos:
@@ -78,18 +78,18 @@ def _intraday_signals(df: pd.DataFrame) -> list[dict]:
                 "time": _time_of(bos["date"]),
                 "label": "突" if bos["kind"] == "bullish" else "破",
                 "kind": "bos",
-                "price": bos["price"],
+                "price": round(bos["price"], 2),
                 "note": bos["note"],
             }
         )
     choch = st.get("last_choch")
     if choch:
-        out.append({"time": _time_of(choch["date"]), "label": "变", "kind": "choch", "price": choch["price"], "note": choch["note"]})
+        out.append({"time": _time_of(choch["date"]), "label": "变", "kind": "choch", "price": round(choch["price"], 2), "note": choch["note"]})
     for s in (analyze_wyckoff(df).get("signals") or []):
         if s["kind"] == "spring":
-            out.append({"time": _time_of(s["date"]), "label": "积", "kind": "spring", "price": s["price"], "note": s["note"]})
+            out.append({"time": _time_of(s["date"]), "label": "积", "kind": "spring", "price": round(s["price"], 2), "note": s["note"]})
         elif s["kind"] == "upthrust":
-            out.append({"time": _time_of(s["date"]), "label": "派", "kind": "upthrust", "price": s["price"], "note": s["note"]})
+            out.append({"time": _time_of(s["date"]), "label": "派", "kind": "upthrust", "price": round(s["price"], 2), "note": s["note"]})
     # 去重（同时间+同标签），按时间排序
     seen: set[tuple[str, str]] = set()
     dedup = []
@@ -130,11 +130,11 @@ def _recent_daily_signals(astock_mod, code: str) -> list[dict]:
     out: list[dict] = []
     for s in (analyze_wyckoff(seg).get("signals") or []):
         if str(s["date"]) <= ref_date:
-            out.append({"date": str(s["date"]), "price": s["price"], "label": "积" if s["kind"] == "spring" else "派", "kind": s["kind"], "note": s["note"]})
+            out.append({"date": str(s["date"]), "price": round(s["price"], 2), "label": "积" if s["kind"] == "spring" else "派", "kind": s["kind"], "note": s["note"]})
     smc = analyze_smc(seg)
     for s in (smc.get("sweeps") or []):
         if str(s["date"]) <= ref_date:
-            out.append({"date": str(s["date"]), "price": s["price"], "label": "扫", "kind": "sweep", "note": s["note"]})
+            out.append({"date": str(s["date"]), "price": round(s["price"], 2), "label": "扫", "kind": "sweep", "note": s["note"]})
     st = smc.get("structure") or {}
     for key, label in (("last_bos", None), ("last_choch", "变")):
         item = st.get(key)
@@ -142,7 +142,7 @@ def _recent_daily_signals(astock_mod, code: str) -> list[dict]:
             continue
         if key == "last_bos":
             label = "突" if item["kind"] == "bullish" else "破"
-        out.append({"date": str(item["date"]), "price": item["price"], "label": label, "kind": key, "note": item["note"]})
+        out.append({"date": str(item["date"]), "price": round(item["price"], 2), "label": label, "kind": key, "note": item["note"]})
     out.sort(key=lambda x: x["date"])
     return out[-8:]
 

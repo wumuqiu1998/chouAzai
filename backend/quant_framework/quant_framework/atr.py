@@ -91,10 +91,10 @@ def compute_atr(
         bars.append(
             {
                 "date": _bar_key(d["datetime"].iloc[i]),
-                "mid": round(float(mid.iloc[i]), 4) if pd.notna(mid.iloc[i]) else None,
-                "upper": round(float(upper.iloc[i]), 4) if pd.notna(upper.iloc[i]) else None,
-                "lower": round(float(lower.iloc[i]), 4) if pd.notna(lower.iloc[i]) else None,
-                "atr": round(float(atr.iloc[i]), 4) if pd.notna(atr.iloc[i]) else None,
+                "mid": round(float(mid.iloc[i]), 2) if pd.notna(mid.iloc[i]) else None,
+                "upper": round(float(upper.iloc[i]), 2) if pd.notna(upper.iloc[i]) else None,
+                "lower": round(float(lower.iloc[i]), 2) if pd.notna(lower.iloc[i]) else None,
+                "atr": round(float(atr.iloc[i]), 2) if pd.notna(atr.iloc[i]) else None,
             }
         )
 
@@ -115,7 +115,7 @@ def compute_atr(
                 {
                     "date": date,
                     "kind": "overheat",
-                    "price": round(float(close.iloc[i]), 4),
+                    "price": round(float(close.iloc[i]), 2),
                     "note": f"收盘 {close.iloc[i]:.2f} 突破上轨 {upper.iloc[i]:.2f}（MA{ma_period}+{mult}×ATR{atr.iloc[i]:.2f}），进入极端强势区，警惕见顶",
                 }
             )
@@ -132,7 +132,7 @@ def compute_atr(
                 {
                     "date": date,
                     "kind": "oversold",
-                    "price": round(float(close.iloc[i]), 4),
+                    "price": round(float(close.iloc[i]), 2),
                     "note": f"收盘 {close.iloc[i]:.2f} 跌破下轨 {lower.iloc[i]:.2f}（MA{ma_period}-{mult}×ATR{atr.iloc[i]:.2f}），进入极端弱势区，警惕见底",
                 }
             )
@@ -168,9 +168,9 @@ def compute_atr(
                         extreme = _bar_key(d["datetime"].iloc[heat_pending["max_high_i"]])
                         signals.append(
                             {
-                                "date": date,
-                                "kind": "top",
-                                "price": round(heat_pending["max_high"], 4),
+                            "date": date,
+                            "kind": "top",
+                            "price": round(heat_pending["max_high"], 2),
                                 "note": (
                                     f"超涨段最高 {heat_pending['max_high']:.2f}（{extreme}）后回落 "
                                     f"{drop:.2f}（≥{confirm_amp_mult}×ATR{atr.iloc[i]:.2f}），确认潜在顶部"
@@ -210,7 +210,7 @@ def compute_atr(
                             {
                                 "date": date,
                                 "kind": "bottom",
-                                "price": round(cold_pending["min_low"], 4),
+                                "price": round(cold_pending["min_low"], 2),
                                 "note": (
                                     f"超跌段最低 {cold_pending['min_low']:.2f}（{extreme}）后反弹 "
                                     f"{rise:.2f}（≥{confirm_amp_mult}×ATR{atr.iloc[i]:.2f}），确认潜在底部"

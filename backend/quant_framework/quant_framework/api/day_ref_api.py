@@ -55,7 +55,11 @@ def day_ref(code: str = Query(...), offset: int = Query(120, ge=60, le=400)):
     ref_date = str(df["datetime"].iloc[ref_idx].date())
     seg = df.iloc[: ref_idx + 1]
     chan = analyze_chan(seg)
-    points = [p for p in chan["points"] if str(p["date"]) <= ref_date][-12:]
+    points = [
+        {"kind": p["kind"], "date": p["date"], "price": round(p["price"], 2), "note": p["note"]}
+        for p in chan["points"]
+        if str(p["date"]) <= ref_date
+    ][-12:]
     zhongshu = [z for z in chan["zhongshu"] if str(z["end_date"]) <= ref_date][-2:]
     atr = compute_atr(seg)
     abar = atr["bars"][-1] if atr["bars"] else {}
@@ -63,10 +67,10 @@ def day_ref(code: str = Query(...), offset: int = Query(120, ge=60, le=400)):
     return {
         "ref_date": ref_date,
         "ref_bar": {
-            "open": round(float(rb["open"]), 3),
-            "high": round(float(rb["high"]), 3),
-            "low": round(float(rb["low"]), 3),
-            "close": round(float(rb["close"]), 3),
+            "open": round(float(rb["open"]), 2),
+            "high": round(float(rb["high"]), 2),
+            "low": round(float(rb["low"]), 2),
+            "close": round(float(rb["close"]), 2),
             "volume": float(rb.get("volume") or 0),
         },
         "prev_close": prev,
