@@ -82,7 +82,6 @@ try:
     from quant_framework.api import chan_api as quant_chan_api
     from quant_framework.api import config_api as quant_config_api
     from quant_framework.api import experiments_api as quant_experiments_api
-    from quant_framework.api import signal_score_api as quant_signal_score_api
     from quant_framework.api import smc_api as quant_smc_api
 
     app.include_router(quant_config_api.router)
@@ -91,7 +90,6 @@ try:
     app.include_router(quant_audit_api.router)
     app.include_router(quant_chan_api.router)
     app.include_router(quant_atr_api.router)
-    app.include_router(quant_signal_score_api.router)
     app.include_router(quant_smc_api.router)
 except ImportError as _qf_exc:  # noqa: F841
     print(f"[WARN] 量化研究模块未完整加载（需 pandas/pyyaml/fastapi）：{_qf_exc}", file=sys.stderr)

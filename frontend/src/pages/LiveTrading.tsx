@@ -76,24 +76,6 @@ interface AtrData {
   signals: Array<{ date: string; kind: "overheat" | "oversold" | "top" | "bottom"; price: number; note: string }>;
 }
 
-interface SignalScoreData {
-  score: number;
-  level: string;
-  advice: string;
-  price: number;
-  parts: Record<string, { score: number; weight: number; reasons: string[] }>;
-  trailing_stop: {
-    peak_high: number;
-    peak_date: string;
-    stop_price: number;
-    drawdown_pct: number;
-    triggered: boolean;
-  } | null;
-  volume_divergence: Array<{ date: string; price: number }>;
-  data_date?: string | null;
-  exclude_last?: boolean;
-}
-
 interface WyckoffData {
   bars: Array<{ date: string; state: string }>;
   phases: Array<{ start: string; end: string; phase: string }>;
@@ -147,8 +129,6 @@ interface ResonanceData {
 
 const color = (v: number | undefined | null) =>
   v == null ? "text-muted-foreground" : v > 0 ? "text-danger" : v < 0 ? "text-success" : "text-muted-foreground";
-const scoreColor = (s: number) =>
-  s >= 40 ? "#22c55e" : s >= 10 ? "#84cc16" : s > -10 ? "#f59e0b" : s > -40 ? "#f97316" : "#ef4444";
 const pct = (v: number | undefined | null) => (v == null ? "—" : `${v > 0 ? "+" : ""}${v.toFixed(2)}%`);
 const fmt = (v: number | null | undefined) => (v == null ? "—" : v.toLocaleString("zh-CN", { maximumFractionDigits: 2 }));
 
@@ -218,15 +198,6 @@ async function fetchAtr(code: string, category: number, offset: number, window?:
   );
   if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
   return (await resp.json()) as AtrData;
-}
-
-async function fetchSignalScore(code: string, category: number, offset: number, window?: number, excludeLast = false): Promise<SignalScoreData> {
-  const resp = await fetch(
-    `/api/quant/signal-score?code=${code}&category=${category}&offset=${offset}&window=${window ?? ""}&exclude_last=${excludeLast ? 1 : 0}`,
-    { headers: authHeaders() },
-  );
-  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-  return (await resp.json()) as SignalScoreData;
 }
 
 async function fetchWyckoff(code: string, category: number, offset: number, excludeLast = false): Promise<WyckoffData> {
@@ -346,7 +317,6 @@ function KLineModal({
   const cacheRef = useRef<Record<string, { bars?: Array<Record<string, unknown>>; minute?: MinuteData }>>({});
   const chanCacheRef = useRef<Record<string, ChanData>>({});
   const atrCacheRef = useRef<Record<string, AtrData>>({});
-  const signalCacheRef = useRef<Record<string, SignalScoreData>>({});
   const wyckoffCacheRef = useRef<Record<string, WyckoffData>>({});
   const smcCacheRef = useRef<Record<string, SmcData>>({});
   const resonanceCacheRef = useRef<Record<string, ResonanceData>>({});
@@ -354,8 +324,6 @@ function KLineModal({
   const [chanData, setChanData] = useState<ChanData | null>(null);
   const [atrOn, setAtrOn] = useState(true);
   const [atrData, setAtrData] = useState<AtrData | null>(null);
-  const [signalOn, setSignalOn] = useState(true);
-  const [signalData, setSignalData] = useState<SignalScoreData | null>(null);
   const [wyckoffOn, setWyckoffOn] = useState(true);
   const [wyckoffData, setWyckoffData] = useState<WyckoffData | null>(null);
   const [smcOn, setSmcOn] = useState(true);
@@ -491,31 +459,6 @@ function KLineModal({
       cancelled = true;
     };
   }, [atrOn, code, tab, barCount, atrWindow, excludeLast]);
-
-  // 新手综合信号量（趋势/ATR/缠论/量能加权）
-  useEffect(() => {
-    if (!signalOn || tab === "minute") {
-      setSignalData(null);
-      return;
-    }
-    let cancelled = false;
-    const key = `${code}-${tab}-${atrWindow}-${excludeLast ? "u" : "c"}`;
-    const cached = signalCacheRef.current[key];
-    if (cached) {
-      setSignalData(cached);
-      return;
-    }
-    fetchSignalScore(code, Number(tab), barCount, atrWindow, excludeLast)
-      .then((d) => {
-        if (cancelled) return;
-        signalCacheRef.current[key] = d;
-        setSignalData(d);
-      })
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, [signalOn, code, tab, barCount, atrWindow, excludeLast]);
 
   // 威科夫阶段（吸筹/拉升/派发/下跌 + 主力成本区）
   useEffect(() => {
@@ -791,51 +734,6 @@ function KLineModal({
     }
     if (atrOn && atrData && atrData.bars.length > 0) {
       const idxOf = new Map(data.map((b, i) => [b.date.slice(0, 16), i]));
-      if (signalOn && signalData && signalData.trailing_stop) {
-        const stop = signalData.trailing_stop;
-        const minL = Math.min(...data.map((b) => b.l));
-        const maxH = Math.max(...data.map((b) => b.h));
-        // 止盈线只在仍处于当前价格区间附近时画线，深跌后不拉高 Y 轴
-        if (stop.stop_price >= minL * 0.985 && stop.stop_price <= maxH * 1.015) {
-          extraSeries.push({
-            name: "止盈线",
-            type: "line",
-            data: data.map((_, i) => [i, stop.stop_price] as [number, number]),
-            showSymbol: false,
-            lineStyle: { width: 1, color: "#a855f7", type: "dashed", opacity: 0.8 },
-            emphasis: { disabled: true },
-            z: 4,
-          });
-          legendData.push("止盈线");
-        }
-        const divItems = signalData.volume_divergence
-          .map((v) => {
-            const i = idxOf.get(v.date.slice(0, 16));
-            if (i === undefined) return null;
-            const bar = data[i];
-            return { value: [i, bar.h + chartRange * 0.03], name: "缩量", note: `新高缩量 ${v.date}` };
-          })
-          .filter((v): v is { value: [number, number]; name: string; note: string } => v !== null);
-        if (divItems.length > 0) {
-          extraSeries.push({
-            name: "缩量",
-            type: "scatter",
-            data: divItems,
-            symbol: "circle",
-            symbolSize: 8,
-            itemStyle: { color: "#a855f7", borderColor: "#ffffff", borderWidth: 1 },
-            tooltip: {
-              show: true,
-              formatter: (p: unknown) => {
-                const it = p as { data?: { note?: string } };
-                return it.data?.note ?? "";
-              },
-            },
-            z: 8,
-          });
-          legendData.push("缩量");
-        }
-      }
       const bandLine = (field: "upper" | "mid" | "lower", color: string, label: string) => {
         const pts = atrData.bars
           .map((b) => {
@@ -1206,6 +1104,28 @@ function KLineModal({
     const maxMove = Math.max(dayRange, 0.005);
     const lo = pc * (1 - maxMove * 1.08);
     const hi = pc * (1 + maxMove * 1.08);
+    const maConfs: Array<[number, string, string]> = [
+      [5, "MA5", "#f5f5f4"],
+      [10, "MA10", "#fbbf24"],
+      [20, "MA20", "#c084fc"],
+    ];
+    const maSeries = maConfs.map(([period, maName, maColor]) => {
+      const vals: (number | null)[] = pts.map((_, i) => {
+        if (i < period - 1) return null;
+        let s = 0;
+        for (let j = i - period + 1; j <= i; j++) s += pts[j].price;
+        return s / period;
+      });
+      return {
+        name: maName,
+        type: "line" as const,
+        data: vals,
+        showSymbol: false,
+        lineStyle: { width: 1, color: maColor },
+        emphasis: { disabled: true },
+        z: 2,
+      };
+    });
     chart.clear();
     chart.setOption({
       backgroundColor: "transparent",
@@ -1214,14 +1134,24 @@ function KLineModal({
         axisPointer: { type: "cross" },
         formatter: (params: unknown) => {
           const list = params as Array<{ dataIndex: number }>;
-          const p = pts[list[0]?.dataIndex ?? 0];
+          const idx = list[0]?.dataIndex ?? 0;
+          const p = pts[idx];
           if (!p) return "";
           const chgPct = pc ? ((p.price - pc) / pc) * 100 : 0;
           const col = chgPct >= 0 ? "#ef4444" : "#22c55e";
-          return `${fmtMinuteTime(p.time)}<br/>价 ${p.price.toFixed(2)}　均价 ${p.avg_price.toFixed(2)}<br/>涨幅 <span style="color:${col}">${chgPct >= 0 ? "+" : ""}${chgPct.toFixed(2)}%</span><br/>量 ${fmt(p.volume)}`;
+          const maText = maConfs
+            .map(([period, maName]) => {
+              if (idx < period - 1) return "";
+              let s = 0;
+              for (let j = idx - period + 1; j <= idx; j++) s += pts[j].price;
+              return `${maName} ${(s / period).toFixed(2)}`;
+            })
+            .filter(Boolean)
+            .join("　");
+          return `${fmtMinuteTime(p.time)}<br/>价 ${p.price.toFixed(2)}　均价 ${p.avg_price.toFixed(2)}<br/>涨幅 <span style="color:${col}">${chgPct >= 0 ? "+" : ""}${chgPct.toFixed(2)}%</span><br/>${maText}<br/>量 ${fmt(p.volume)}`;
         },
       },
-      legend: { data: ["价格", "均价", "成交量"], textStyle: { color: "#a8a29e" }, top: 0 },
+      legend: { data: ["价格", "均价", "成交量", "MA5", "MA10", "MA20"], textStyle: { color: "#a8a29e" }, top: 0 },
       graphic: [
         {
           type: "text",
@@ -1287,6 +1217,7 @@ function KLineModal({
             ],
           },
         },
+        ...maSeries,
         {
           name: "均价",
           type: "line",
@@ -1395,16 +1326,6 @@ function KLineModal({
             缠论{chanOn ? "开" : "关"}
           </button>
           <button
-            onClick={() => setSignalOn((v) => !v)}
-            className={cn(
-              "ml-1 rounded-md px-2 py-1 text-xs",
-              signalOn ? "bg-violet-500/15 font-medium text-violet-400" : "bg-muted/40 text-muted-foreground hover:text-foreground",
-            )}
-            title="新手信号量：-100~+100 综合评分（趋势/ATR/缠论/量能加权）+ 移动止盈线 + 新高缩量"
-          >
-            信号量{signalOn ? "开" : "关"}
-          </button>
-          <button
             onClick={() => setAtrOn((v) => !v)}
             className={cn(
               "ml-1 rounded-md px-2 py-1 text-xs",
@@ -1501,35 +1422,6 @@ function KLineModal({
             <span className="text-muted-foreground" title={`SMC 权重 ${Math.round(resonance.weights.smc * 100)}% · 得分 ${resonance.smc.score}\n${resonance.smc.notes.join("\n")}`}>
               SMC {resonance.smc.structure === "bullish" ? "多" : resonance.smc.structure === "bearish" ? "空" : "震荡"}
             </span>
-          </div>
-        )}
-        {signalOn && signalData && tab !== "minute" && (
-          <div
-            className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border px-3 py-2"
-            style={{ borderColor: `${scoreColor(signalData.score)}55`, background: `${scoreColor(signalData.score)}14` }}
-            title={Object.entries(signalData.parts)
-              .map(([k, v]) => `${k}: ${v.score}（${v.reasons.join("；")}）`)
-              .join("\n")}
-          >
-            <span className="text-xs text-muted-foreground">新手信号量</span>
-            <span className="text-2xl font-black tabular-nums" style={{ color: scoreColor(signalData.score) }}>
-              {signalData.score}
-            </span>
-            <span
-              className="rounded px-1.5 py-0.5 text-xs font-bold"
-              style={{ color: scoreColor(signalData.score), background: `${scoreColor(signalData.score)}22` }}
-            >
-              {signalData.level}
-            </span>
-            {signalData.trailing_stop?.triggered && (
-              <span className="rounded bg-danger/10 px-1.5 py-0.5 text-[11px] font-semibold text-danger">止盈线已触发</span>
-            )}
-            <span className="text-[11px] text-muted-foreground">{signalData.advice}</span>
-            {signalData.volume_divergence.length > 0 && (
-              <span className="rounded bg-violet-500/10 px-1.5 py-0.5 text-[11px] font-semibold text-violet-400">
-                新高缩量 {signalData.volume_divergence.length} 次
-              </span>
-            )}
           </div>
         )}
         {chanOn && chanData && chanData.points.length > 0 && (
