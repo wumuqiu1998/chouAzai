@@ -427,6 +427,48 @@ def kline(code: str, category: int = 4, offset: int = 60) -> list[dict]:
     return rows
 
 
+def index_kline(code: str, offset: int = 320) -> list[dict]:
+    """指数日K（code 带交易所前缀，如 sh000001 / sz399006 / sh000300）。"""
+    import requests
+
+    key = ("idx", code, offset)
+    hit = _KLINE_CACHE.get(key)
+    if hit and time.time() - hit[0] < 30:
+        return hit[1]
+    rows: list[dict] = []
+    try:
+        resp = requests.get(
+            "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get",
+            params={"param": f"{code},day,,,{offset},qfq"},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        node = resp.json().get("data", {}).get(code) or {}
+        raw = node.get(f"qfqday") or node.get("day") or []
+        # 腾讯指数行格式：["2026-06-29","4026.690","4073.900","4075.330","3992.550","659199936.000"]
+        for row in raw:
+            if not row or len(row) < 6:
+                continue
+            try:
+                rows.append(
+                    {
+                        "datetime": str(row[0])[:10],
+                        "open": float(row[1]),
+                        "close": float(row[2]),
+                        "high": float(row[3]),
+                        "low": float(row[4]),
+                        "volume": float(row[5]),
+                        "amount": float(row[6]) if len(row) > 6 and row[6] else 0.0,
+                    }
+                )
+            except (TypeError, ValueError):
+                continue
+    except Exception:
+        rows = []
+    _KLINE_CACHE[key] = (time.time(), rows)
+    return rows
+
+
 def finance(code: str) -> dict:
     """季报财务快照（37 字段）。"""
     client = _mootdx_client()

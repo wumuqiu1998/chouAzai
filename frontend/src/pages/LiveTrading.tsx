@@ -76,6 +76,46 @@ interface AtrData {
   signals: Array<{ date: string; kind: "overheat" | "oversold" | "top" | "bottom"; price: number; note: string }>;
 }
 
+interface WyckoffData {
+  bars: Array<{ date: string; state: string }>;
+  phases: Array<{ start: string; end: string; phase: string }>;
+  current: { phase: string; since: string; days: number };
+  cost_zone: { phase: string; start: string; end: string; low: number; high: number; mid: number } | null;
+  signals: Array<{ date: string; kind: "spring" | "upthrust"; price: number; note: string }>;
+  last_close: number;
+}
+
+interface SmcData {
+  fvg: Array<{ date: string; kind: "bullish" | "bearish"; bottom: number; top: number; filled: boolean }>;
+  ob: Array<{ date: string; kind: "bullish" | "bearish"; bottom: number; top: number }>;
+  sweeps: Array<{ date: string; kind: "bullish" | "bearish"; price: number; note: string }>;
+  structure: {
+    state: "bullish" | "bearish" | "range";
+    last_bos: { date: string; kind: string; price: number; note: string } | null;
+    last_choch: { date: string; kind: string; price: number; note: string } | null;
+  };
+}
+
+interface MarketRegime {
+  market: {
+    state: "strong_up" | "up" | "range" | "down" | "strong_down";
+    score: number;
+    label: string;
+    up_count: number;
+    down_count: number;
+    total: number;
+  };
+  indices: Array<{
+    name: string;
+    code: string;
+    state: "up" | "range" | "down";
+    last: number;
+    ma20: number | null;
+    ret20_pct: number;
+    structure: "higher_high" | "lower_low" | "mixed";
+  }>;
+}
+
 const color = (v: number | undefined | null) =>
   v == null ? "text-muted-foreground" : v > 0 ? "text-danger" : v < 0 ? "text-success" : "text-muted-foreground";
 const pct = (v: number | undefined | null) => (v == null ? "—" : `${v > 0 ? "+" : ""}${v.toFixed(2)}%`);
@@ -147,6 +187,30 @@ async function fetchAtr(code: string, category: number, offset: number, window?:
   );
   if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
   return (await resp.json()) as AtrData;
+}
+
+async function fetchWyckoff(code: string, category: number, offset: number, excludeLast = false): Promise<WyckoffData> {
+  const resp = await fetch(
+    `/api/quant/smc/wyckoff?code=${code}&category=${category}&offset=${offset}&exclude_last=${excludeLast ? 1 : 0}`,
+    { headers: authHeaders() },
+  );
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  return (await resp.json()) as WyckoffData;
+}
+
+async function fetchSmc(code: string, category: number, offset: number, excludeLast = false): Promise<SmcData> {
+  const resp = await fetch(
+    `/api/quant/smc/analyze?code=${code}&category=${category}&offset=${offset}&exclude_last=${excludeLast ? 1 : 0}`,
+    { headers: authHeaders() },
+  );
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  return (await resp.json()) as SmcData;
+}
+
+async function fetchMarketRegime(): Promise<MarketRegime> {
+  const resp = await fetch("/api/quant/smc/market-regime", { headers: authHeaders() });
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  return (await resp.json()) as MarketRegime;
 }
 
 function IndexCard({ name, price, change_pct }: IndexQuote) {
@@ -233,10 +297,16 @@ function KLineModal({
   const cacheRef = useRef<Record<string, { bars?: Array<Record<string, unknown>>; minute?: MinuteData }>>({});
   const chanCacheRef = useRef<Record<string, ChanData>>({});
   const atrCacheRef = useRef<Record<string, AtrData>>({});
+  const wyckoffCacheRef = useRef<Record<string, WyckoffData>>({});
+  const smcCacheRef = useRef<Record<string, SmcData>>({});
   const [chanOn, setChanOn] = useState(true);
   const [chanData, setChanData] = useState<ChanData | null>(null);
   const [atrOn, setAtrOn] = useState(true);
   const [atrData, setAtrData] = useState<AtrData | null>(null);
+  const [wyckoffOn, setWyckoffOn] = useState(true);
+  const [wyckoffData, setWyckoffData] = useState<WyckoffData | null>(null);
+  const [smcOn, setSmcOn] = useState(true);
+  const [smcData, setSmcData] = useState<SmcData | null>(null);
   // 盘中实时：最后一根 K 线未收盘，指标只使用已收盘数据（排除末根）
   const excludeLast = tab !== "minute" && isTradingHours();
   const [barCount, setBarCount] = useState(250);
@@ -368,6 +438,56 @@ function KLineModal({
     };
   }, [atrOn, code, tab, barCount, atrWindow, excludeLast]);
 
+  // 威科夫阶段（吸筹/拉升/派发/下跌 + 主力成本区）
+  useEffect(() => {
+    if (!wyckoffOn || tab === "minute") {
+      setWyckoffData(null);
+      return;
+    }
+    let cancelled = false;
+    const key = `${code}-${tab}-${barCount}-${excludeLast ? "u" : "c"}`;
+    const cached = (wyckoffCacheRef.current as Record<string, WyckoffData>)[key];
+    if (cached) {
+      setWyckoffData(cached);
+      return;
+    }
+    fetchWyckoff(code, Number(tab), barCount, excludeLast)
+      .then((d) => {
+        if (cancelled) return;
+        wyckoffCacheRef.current[key] = d;
+        setWyckoffData(d);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [wyckoffOn, code, tab, barCount, excludeLast]);
+
+  // ICT/SMC 结构（FVG/OB/扫荡/结构突破）
+  useEffect(() => {
+    if (!smcOn || tab === "minute") {
+      setSmcData(null);
+      return;
+    }
+    let cancelled = false;
+    const key = `${code}-${tab}-${barCount}-${excludeLast ? "u" : "c"}`;
+    const cached = (smcCacheRef.current as Record<string, SmcData>)[key];
+    if (cached) {
+      setSmcData(cached);
+      return;
+    }
+    fetchSmc(code, Number(tab), barCount, excludeLast)
+      .then((d) => {
+        if (cancelled) return;
+        smcCacheRef.current[key] = d;
+        setSmcData(d);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [smcOn, code, tab, barCount, excludeLast]);
+
   // 盘中自动刷新：交易时段每 15 秒重拉当前周期数据，涨幅/图表实时更新
   useEffect(() => {
     let cancelled = false;
@@ -476,6 +596,7 @@ function KLineModal({
     const zoomStart = barCount > viewCount ? Math.round((1 - viewCount / barCount) * 100) : 0;
     const legendData = ["K线", "MA5", "MA10", "MA20", "MA60", "成交量"];
     const extraSeries: object[] = [];
+    const chartRange = Math.max(...data.map((b) => b.h)) - Math.min(...data.map((b) => b.l));
     // MA 基于末尾 atrWindow 根（含左侧缓冲），前面补 null 与 K 线索引对齐；
     // 盘中实时再排除未收盘末根，末尾补 null 保持索引对齐
     const maRaw = excludeLast ? data.slice(-atrWindow, -1) : data.slice(-atrWindow);
@@ -499,8 +620,6 @@ function KLineModal({
           z: 2,
         });
       }
-      const chartRange =
-        Math.max(...data.map((b) => b.h)) - Math.min(...data.map((b) => b.l));
       const marker = (kindPrefix: string, color: string, label: string, isBuy: boolean) => {
         const items = chanData.points
           .filter((p) => p.kind.startsWith(kindPrefix))
@@ -590,7 +709,6 @@ function KLineModal({
       bandLine("upper", "#f97316", "ATR上轨");
       bandLine("lower", "#06b6d4", "ATR下轨");
       bandLine("mid", "#c084fc", "ATR中轨");
-      const chartRange = Math.max(...data.map((b) => b.h)) - Math.min(...data.map((b) => b.l));
       const atrMarker = (
         kind: "overheat" | "oversold" | "top" | "bottom",
         color: string,
@@ -643,6 +761,183 @@ function KLineModal({
       atrMarker("oversold", "#06b6d4", "超跌", false, "triangle", 0);
       atrMarker("top", "#ef4444", "顶", true, "diamond", 0);
       atrMarker("bottom", "#22c55e", "底", false, "diamond", 0);
+    }
+    // 威科夫阶段：色带 + 主力成本区 + Spring/Upthrust
+    if (wyckoffOn && wyckoffData && wyckoffData.phases.length > 0) {
+      const idxOf = new Map(data.map((b, i) => [b.date.slice(0, 16), i]));
+      const phaseColor: Record<string, string> = {
+        accumulation: "rgba(6,182,212,.10)",
+        markup: "rgba(239,68,68,.08)",
+        distribution: "rgba(249,115,22,.10)",
+        markdown: "rgba(34,197,94,.08)",
+      };
+      const areas: Array<Record<string, unknown>> = [];
+      for (const ph of wyckoffData.phases) {
+        const s = idxOf.get(ph.start.slice(0, 16));
+        const e = idxOf.get(ph.end.slice(0, 16));
+        if (s === undefined || e === undefined) continue;
+        const seg = data.slice(s, e + 1);
+        if (seg.length === 0) continue;
+        const ylo = Math.min(...seg.map((b) => b.l));
+        const yhi = Math.max(...seg.map((b) => b.h));
+        areas.push(
+          { xAxis: s, yAxis: ylo },
+          { xAxis: e, yAxis: yhi, itemStyle: { color: phaseColor[ph.phase] ?? "rgba(255,255,255,.05)" } },
+        );
+      }
+      if (areas.length > 0) {
+        // markArea 需要 [{xAxis,yAxis},{xAxis,yAxis}] 成对结构；上面用 end 项带色
+        const pairs: Array<Array<Record<string, unknown>>> = [];
+        for (let i = 0; i + 1 < areas.length; i += 2) {
+          pairs.push([{ xAxis: areas[i].xAxis, yAxis: areas[i].yAxis }, { xAxis: areas[i + 1].xAxis, yAxis: areas[i + 1].yAxis, itemStyle: areas[i + 1].itemStyle }]);
+        }
+        if (pairs.length > 0) {
+          extraSeries.push({
+            name: "威科夫阶段",
+            type: "line",
+            data: [],
+            markArea: { silent: true, data: pairs },
+            z: 0,
+          });
+          legendData.push("威科夫阶段");
+        }
+      }
+      // 主力成本区：黄色虚线（低/高）
+      if (wyckoffData.cost_zone) {
+        const cz = wyckoffData.cost_zone;
+        extraSeries.push({
+          name: "主力成本区",
+          type: "line",
+          data: [],
+          markLine: {
+            symbol: "none",
+            silent: true,
+            lineStyle: { color: "#eab308", type: "dashed", width: 1 },
+            label: { color: "#eab308", fontSize: 10 },
+            data: [
+              { yAxis: cz.low, name: `成本区下沿 ${cz.low.toFixed(2)}` },
+              { yAxis: cz.high, name: `成本区上沿 ${cz.high.toFixed(2)}` },
+            ],
+          },
+          z: 2,
+        });
+        legendData.push("主力成本区");
+      }
+      // Spring / Upthrust
+      const wkMarker = (kind: "spring" | "upthrust", color: string, label: string, isTop: boolean) => {
+        const items = wyckoffData.signals
+          .filter((s) => s.kind === kind)
+          .map((s) => {
+            const i = idxOf.get(s.date.slice(0, 16));
+            if (i === undefined) return null;
+            const bar = data[i];
+            const gap = chartRange * 0.02;
+            return { value: [i, isTop ? bar.h + gap : bar.l - gap], name: label, note: s.note, date: s.date };
+          })
+          .filter((v) => v !== null);
+        if (items.length === 0) return;
+        extraSeries.push({
+          name: label,
+          type: "scatter",
+          data: items,
+          symbol: "arrow",
+          symbolSize: 13,
+          symbolRotate: isTop ? 90 : -90,
+          itemStyle: { color, borderColor: "#fff", borderWidth: 1 },
+          label: {
+            show: true,
+            position: isTop ? "top" : "bottom",
+            color,
+            fontSize: 10,
+            fontWeight: 700,
+            backgroundColor: "rgba(0,0,0,.65)",
+            padding: [1, 3],
+            borderRadius: 3,
+          },
+          tooltip: {
+            show: true,
+            formatter: (p: unknown) => {
+              const it = p as { data?: { date?: string; note?: string } };
+              return it.data?.date ? `<b>${label}</b>（${it.data.date.slice(0, 16)}）<br/>${it.data.note ?? ""}` : "";
+            },
+          },
+          z: 7,
+        });
+        legendData.push(label);
+      };
+      wkMarker("spring", "#22c55e", "吸筹确认", false);
+      wkMarker("upthrust", "#f97316", "派发确认", true);
+    }
+    // ICT/SMC：FVG 缺口 + OB 订单块 + 流动性扫荡
+    if (smcOn && smcData) {
+      const idxOf = new Map(data.map((b, i) => [b.date.slice(0, 16), i]));
+      const zoneArea = (label: string, color: string, zones: Array<{ date: string; bottom: number; top: number }>, filledDim = false) => {
+        const pairs: Array<Array<Record<string, unknown>>> = [];
+        for (const z of zones) {
+          const i = idxOf.get(z.date.slice(0, 16));
+          if (i === undefined) continue;
+          const itemStyle = filledDim ? { color, opacity: 0.35 } : { color };
+          pairs.push([
+            { xAxis: i - 0.5, yAxis: z.bottom, itemStyle },
+            { xAxis: i + 0.5, yAxis: z.top, itemStyle },
+          ]);
+        }
+        if (pairs.length === 0) return;
+        extraSeries.push({
+          name: label,
+          type: "line",
+          data: [],
+          markArea: { silent: true, data: pairs },
+          z: 1,
+        });
+        legendData.push(label);
+      };
+      if (smcData.fvg.length > 0) {
+        zoneArea("FVG看涨", "rgba(34,197,94,.13)", smcData.fvg.filter((g) => g.kind === "bullish"));
+        zoneArea("FVG看跌", "rgba(239,68,68,.13)", smcData.fvg.filter((g) => g.kind === "bearish"));
+      }
+      if (smcData.ob.length > 0) {
+        zoneArea("OB看涨", "rgba(6,182,212,.16)", smcData.ob.filter((g) => g.kind === "bullish"));
+        zoneArea("OB看跌", "rgba(249,115,22,.16)", smcData.ob.filter((g) => g.kind === "bearish"));
+      }
+      // 流动性扫荡
+      if (smcData.sweeps.length > 0) {
+        const items = smcData.sweeps
+          .map((s) => {
+            const i = idxOf.get(s.date.slice(0, 16));
+            if (i === undefined) return null;
+            const bar = data[i];
+            const gap = chartRange * 0.025;
+            return { value: [i, s.kind === "bullish" ? bar.l - gap : bar.h + gap], name: s.kind === "bullish" ? "扫多" : "扫空", note: s.note, date: s.date };
+          })
+          .filter((v) => v !== null);
+        if (items.length > 0) {
+          extraSeries.push({
+            name: "流动性扫荡",
+            type: "scatter",
+            data: items,
+            symbol: "diamond",
+            symbolSize: 12,
+            itemStyle: { color: "#e11d48", borderColor: "#fff", borderWidth: 1 },
+            label: {
+              show: true,
+              position: "inside",
+              color: "#fff",
+              fontSize: 9,
+              fontWeight: 700,
+            },
+            tooltip: {
+              show: true,
+              formatter: (p: unknown) => {
+                const it = p as { data?: { date?: string; note?: string; name?: string } };
+                return it.data?.date ? `<b>${it.data.name ?? ""}</b>（${it.data.date.slice(0, 16)}）<br/>${it.data.note ?? ""}` : "";
+              },
+            },
+            z: 8,
+          });
+          legendData.push("流动性扫荡");
+        }
+      }
     }
     // K线（分钟/日/周/月）常跨多天：Y 轴按可见数据自适应（scale:true），
     // 不再按“当天范围”钳制，否则历史K线会被压扁/裁掉。涨跌停虚线保留在真实价位。
@@ -742,7 +1037,7 @@ function KLineModal({
         ...extraSeries,
       ],
     });
-  }, [tab, bars, prevClose, chanOn, chanData, atrOn, atrData, barCount, viewCount, atrWindow, excludeLast]);
+  }, [tab, bars, prevClose, chanOn, chanData, atrOn, atrData, wyckoffOn, wyckoffData, smcOn, smcData, barCount, viewCount, atrWindow, excludeLast]);
 
   // 分时 option
   useEffect(() => {
@@ -960,6 +1255,26 @@ function KLineModal({
           >
             ATR{atrOn ? "开" : "关"}
           </button>
+          <button
+            onClick={() => setWyckoffOn((v) => !v)}
+            className={cn(
+              "ml-1 rounded-md px-2 py-1 text-xs",
+              wyckoffOn ? "bg-cyan-500/15 font-medium text-cyan-400" : "bg-muted/40 text-muted-foreground hover:text-foreground",
+            )}
+            title="威科夫：吸筹/拉升/派发/下跌阶段 + 主力成本区 + Spring/Upthrust"
+          >
+            威科夫{wyckoffOn ? "开" : "关"}
+          </button>
+          <button
+            onClick={() => setSmcOn((v) => !v)}
+            className={cn(
+              "ml-1 rounded-md px-2 py-1 text-xs",
+              smcOn ? "bg-fuchsia-500/15 font-medium text-fuchsia-400" : "bg-muted/40 text-muted-foreground hover:text-foreground",
+            )}
+            title="ICT/SMC：FVG缺口 + 订单块OB + 流动性扫荡 + 结构突破"
+          >
+            SMC{smcOn ? "开" : "关"}
+          </button>
           <select
             value={barCount}
             onChange={(e) => {
@@ -1104,6 +1419,7 @@ export function LiveTrading() {
   const { quotes, loading, updatedAt: quoteAt, error: quoteError, refresh: refreshQuotes } = useLiveQuotes(codes, live);
   const { data, error, updatedAt, polling, refresh } = usePolling<LiveSnapshot>(fetchSnapshot, 5000, live, true);
   const { data: radar } = usePolling<RadarData>(fetchRadar, 60_000, live, false);
+  const { data: marketRegime } = usePolling<MarketRegime>(fetchMarketRegime, 300_000, true, false);
 
   const toggleLive = () => {
     setLive((on) => {
@@ -1296,6 +1612,50 @@ export function LiveTrading() {
             </span>
           ))}
         </div>
+      )}
+
+      {/* 市场趋势（道士理论 + 趋势跟踪：宽基指数状态聚合） */}
+      {marketRegime && (
+        <GlassCard className="mb-4">
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+            <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              <Activity className="h-3.5 w-3.5" /> 市场趋势
+            </span>
+            <span
+              className={cn(
+                "rounded-full px-2.5 py-0.5 text-xs font-semibold",
+                marketRegime.market.state.startsWith("up")
+                  ? "bg-danger/15 text-danger"
+                  : marketRegime.market.state.startsWith("down")
+                    ? "bg-success/15 text-success"
+                    : "bg-muted/40 text-muted-foreground",
+              )}
+              title={`趋势得分 ${marketRegime.market.score}`}
+            >
+              {marketRegime.market.label}
+            </span>
+            <span className="text-[11px] text-muted-foreground">
+              上升 {marketRegime.market.up_count} / 下跌 {marketRegime.market.down_count}
+            </span>
+            <div className="ml-auto flex flex-wrap gap-x-3 gap-y-0.5">
+              {marketRegime.indices.map((ix) => (
+                <span key={ix.code} className="text-[11px]">
+                  <b className={cn(ix.state === "up" ? "text-danger" : ix.state === "down" ? "text-success" : "text-muted-foreground")}>
+                    {ix.name}
+                  </b>{" "}
+                  <span className={cn("font-mono", ix.ret20_pct >= 0 ? "text-danger" : "text-success")}>
+                    {ix.ret20_pct > 0 ? "+" : ""}
+                    {ix.ret20_pct.toFixed(1)}%
+                  </span>
+                  <span className="ml-1 text-muted-foreground/60">
+                    {ix.state === "up" ? "升" : ix.state === "down" ? "跌" : "震荡"}
+                    {ix.structure === "higher_high" ? "·高点新高" : ix.structure === "lower_low" ? "·低点新低" : ""}
+                  </span>
+                </span>
+              ))}
+            </div>
+          </div>
+        </GlassCard>
       )}
 
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
