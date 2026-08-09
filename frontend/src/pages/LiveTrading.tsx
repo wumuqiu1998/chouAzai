@@ -70,6 +70,12 @@ interface ChanData {
   bi: Array<{ date: string; price: number; kind: string }>;
 }
 
+interface AtrData {
+  config: { period: number; mult: number; ma_period: number };
+  bars: Array<{ date: string; mid: number | null; upper: number | null; lower: number | null; atr: number | null }>;
+  signals: Array<{ date: string; kind: "overheat" | "oversold" | "top" | "bottom"; price: number; note: string }>;
+}
+
 const color = (v: number | undefined | null) =>
   v == null ? "text-muted-foreground" : v > 0 ? "text-danger" : v < 0 ? "text-success" : "text-muted-foreground";
 const pct = (v: number | undefined | null) => (v == null ? "—" : `${v > 0 ? "+" : ""}${v.toFixed(2)}%`);
@@ -127,6 +133,14 @@ async function fetchChan(code: string, category: number, offset: number): Promis
   });
   if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
   return (await resp.json()) as ChanData;
+}
+
+async function fetchAtr(code: string, category: number, offset: number): Promise<AtrData> {
+  const resp = await fetch(`/api/quant/atr/analyze?code=${code}&category=${category}&offset=${offset}`, {
+    headers: authHeaders(),
+  });
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  return (await resp.json()) as AtrData;
 }
 
 function IndexCard({ name, price, change_pct }: IndexQuote) {
@@ -212,8 +226,11 @@ function KLineModal({
   const chartRef = useRef<echarts.ECharts | null>(null);
   const cacheRef = useRef<Record<string, { bars?: Array<Record<string, unknown>>; minute?: MinuteData }>>({});
   const chanCacheRef = useRef<Record<string, ChanData>>({});
+  const atrCacheRef = useRef<Record<string, AtrData>>({});
   const [chanOn, setChanOn] = useState(true);
   const [chanData, setChanData] = useState<ChanData | null>(null);
+  const [atrOn, setAtrOn] = useState(true);
+  const [atrData, setAtrData] = useState<AtrData | null>(null);
   const [barCount, setBarCount] = useState(250);
 
   useEffect(() => {
@@ -297,6 +314,31 @@ function KLineModal({
       cancelled = true;
     };
   }, [chanOn, code, tab, barCount]);
+
+  // ATR 通道（超涨/超跌/顶底）
+  useEffect(() => {
+    if (!atrOn || tab === "minute") {
+      setAtrData(null);
+      return;
+    }
+    let cancelled = false;
+    const key = `${code}-${tab}-${barCount}`;
+    const cached = atrCacheRef.current[key];
+    if (cached) {
+      setAtrData(cached);
+      return;
+    }
+    fetchAtr(code, Number(tab), barCount)
+      .then((d) => {
+        if (cancelled) return;
+        atrCacheRef.current[key] = d;
+        setAtrData(d);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [atrOn, code, tab, barCount]);
 
   // 盘中自动刷新：交易时段每 15 秒重拉当前周期数据，涨幅/图表实时更新
   useEffect(() => {
@@ -454,6 +496,84 @@ function KLineModal({
       }
       legendData.push("买点", "卖点", "笔", "中枢");
     }
+    if (atrOn && atrData && atrData.bars.length > 0) {
+      const idxOf = new Map(data.map((b, i) => [b.date.slice(0, 16), i]));
+      const bandLine = (field: "upper" | "mid" | "lower", color: string, label: string) => {
+        const pts = atrData.bars
+          .map((b) => {
+            const i = idxOf.get(b.date.slice(0, 16));
+            return i === undefined || b[field] == null ? null : [i, b[field] as number];
+          })
+          .filter((v): v is [number, number] => v !== null);
+        if (pts.length < 2) return;
+        extraSeries.push({
+          name: label,
+          type: "line",
+          data: pts,
+          showSymbol: false,
+          lineStyle: { width: 1, color, type: "dashed", opacity: 0.75 },
+          emphasis: { disabled: true },
+          z: 3,
+        });
+        legendData.push(label);
+      };
+      bandLine("upper", "#f97316", "ATR上轨");
+      bandLine("lower", "#06b6d4", "ATR下轨");
+      bandLine("mid", "#c084fc", "ATR中轨");
+      const chartRange = Math.max(...data.map((b) => b.h)) - Math.min(...data.map((b) => b.l));
+      const atrMarker = (
+        kind: "overheat" | "oversold" | "top" | "bottom",
+        color: string,
+        label: string,
+        isTop: boolean,
+        symbol: string,
+        rotate: number,
+      ) => {
+        const items = atrData.signals
+          .filter((s) => s.kind === kind)
+          .map((s) => {
+            const i = idxOf.get(s.date.slice(0, 16));
+            if (i === undefined) return null;
+            const bar = data[i];
+            const gap = chartRange * 0.02;
+            return { value: [i, isTop ? bar.h + gap : bar.l - gap], name: label, note: s.note, date: s.date };
+          })
+          .filter((v) => v !== null);
+        if (items.length === 0) return;
+        extraSeries.push({
+          name: label,
+          type: "scatter",
+          data: items,
+          symbol,
+          symbolSize: kind === "overheat" || kind === "oversold" ? 12 : 15,
+          symbolRotate: rotate,
+          itemStyle: { color, borderColor: "#ffffff", borderWidth: 1 },
+          label: {
+            show: true,
+            position: isTop ? "top" : "bottom",
+            color,
+            fontSize: 10,
+            fontWeight: 700,
+            backgroundColor: "rgba(0,0,0,.65)",
+            padding: [1, 3],
+            borderRadius: 3,
+          },
+          tooltip: {
+            show: true,
+            formatter: (p: unknown) => {
+              const it = p as { data?: { date?: string; note?: string } };
+              return it.data?.date ? `<b>${label}</b>（${it.data.date.slice(0, 16)}）<br/>${it.data.note ?? ""}` : "";
+            },
+          },
+          z: 7,
+        });
+        legendData.push(label);
+      };
+      atrMarker("overheat", "#f97316", "超涨", true, "triangle", 180);
+      atrMarker("oversold", "#06b6d4", "超跌", false, "triangle", 0);
+      atrMarker("top", "#ef4444", "顶", true, "diamond", 0);
+      atrMarker("bottom", "#22c55e", "底", false, "diamond", 0);
+    }
     // K线（分钟/日/周/月）常跨多天：Y 轴按可见数据自适应（scale:true），
     // 不再按“当天范围”钳制，否则历史K线会被压扁/裁掉。涨跌停虚线保留在真实价位。
     chart.clear();
@@ -542,7 +662,7 @@ function KLineModal({
         ...extraSeries,
       ],
     });
-  }, [tab, bars, prevClose, chanOn, chanData]);
+  }, [tab, bars, prevClose, chanOn, chanData, atrOn, atrData]);
 
   // 分时 option
   useEffect(() => {
@@ -746,6 +866,16 @@ function KLineModal({
           >
             缠论{chanOn ? "开" : "关"}
           </button>
+          <button
+            onClick={() => setAtrOn((v) => !v)}
+            className={cn(
+              "ml-1 rounded-md px-2 py-1 text-xs",
+              atrOn ? "bg-orange-500/15 font-medium text-orange-400" : "bg-muted/40 text-muted-foreground hover:text-foreground",
+            )}
+            title="ATR 通道：超涨/超跌标记 + 潜在顶底（任意周期）"
+          >
+            ATR{atrOn ? "开" : "关"}
+          </button>
           <select
             value={barCount}
             onChange={(e) => setBarCount(Number(e.target.value))}
@@ -794,6 +924,27 @@ function KLineModal({
                 </button>
               );
             })}
+          </div>
+        )}
+        {atrOn && atrData && atrData.signals.filter((s) => s.kind === "top" || s.kind === "bottom").length > 0 && (
+          <div className="mb-2 flex max-h-16 flex-wrap gap-1.5 overflow-auto">
+            {atrData.signals
+              .filter((s) => s.kind === "top" || s.kind === "bottom")
+              .map((s) => (
+                <button
+                  key={`${s.kind}-${s.date}`}
+                  onClick={() => locate(s.date)}
+                  title={s.note}
+                  className={cn(
+                    "rounded border px-2 py-0.5 text-[11px] font-semibold transition-colors",
+                    s.kind === "top"
+                      ? "border-danger/40 bg-danger/10 text-danger hover:bg-danger/20"
+                      : "border-emerald-400/40 bg-emerald-400/10 text-emerald-400 hover:bg-emerald-400/20",
+                  )}
+                >
+                  {s.kind === "top" ? "顶" : "底"} {s.date.slice(5)} {s.price.toFixed(2)}
+                </button>
+              ))}
           </div>
         )}
         <div className="relative min-h-0 flex-1">

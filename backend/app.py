@@ -77,6 +77,7 @@ pf.start_scheduler(1800)
 # 量化研究框架：研究假设卡 / 固定回测 / 实验日志 / 对抗审计
 try:
     from quant_framework.api import audit_api as quant_audit_api
+    from quant_framework.api import atr_api as quant_atr_api
     from quant_framework.api import backtest_api as quant_backtest_api
     from quant_framework.api import chan_api as quant_chan_api
     from quant_framework.api import config_api as quant_config_api
@@ -87,6 +88,7 @@ try:
     app.include_router(quant_experiments_api.router)
     app.include_router(quant_audit_api.router)
     app.include_router(quant_chan_api.router)
+    app.include_router(quant_atr_api.router)
 except ImportError as _qf_exc:  # noqa: F841
     print(f"[WARN] 量化研究模块未完整加载（需 pandas/pyyaml/fastapi）：{_qf_exc}", file=sys.stderr)
 
