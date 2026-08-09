@@ -18,6 +18,16 @@ from __future__ import annotations
 import pandas as pd
 
 
+def _bar_key(dt) -> str:
+    """K 线日期键归一化：与 chan._dt_key 一致。
+
+    "2026-08-07 00:00" -> "2026-08-07"（日/周/月K）
+    "2026-08-07 10:30" -> "2026-08-07 10:30"（分钟K）
+    """
+    s = str(pd.Timestamp(dt))[:16]
+    return s[:-6] if s.endswith(" 00:00") else s
+
+
 def _wilder_smooth(values: pd.Series, period: int) -> pd.Series:
     """Wilder 平滑（等价于 alpha=1/period 的 EMA，起点为前 period 均值）。"""
     return values.ewm(alpha=1.0 / period, min_periods=period, adjust=False).mean()
@@ -73,7 +83,7 @@ def compute_atr(
     for i in range(len(d)):
         bars.append(
             {
-                "date": str(d["datetime"].iloc[i]),
+                "date": _bar_key(d["datetime"].iloc[i]),
                 "mid": round(float(mid.iloc[i]), 4) if pd.notna(mid.iloc[i]) else None,
                 "upper": round(float(upper.iloc[i]), 4) if pd.notna(upper.iloc[i]) else None,
                 "lower": round(float(lower.iloc[i]), 4) if pd.notna(lower.iloc[i]) else None,
@@ -83,7 +93,7 @@ def compute_atr(
 
     signals: list[dict] = []
     for i in range(len(d)):
-        date = str(d["datetime"].iloc[i])
+        date = _bar_key(d["datetime"].iloc[i])
         if pd.notna(overheat.iloc[i]) and bool(overheat.iloc[i]):
             signals.append(
                 {

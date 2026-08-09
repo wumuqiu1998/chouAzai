@@ -39,7 +39,9 @@ def atr_analyze(
     analyze_df = df.iloc[:-1] if exclude_last else df
     result = compute_atr(analyze_df, period=period, mult=mult, ma_period=ma_period)
     if exclude_last:
-        last_dt = str(df["datetime"].iloc[-1])
+        from quant_framework.atr import _bar_key
+
+        last_dt = _bar_key(df["datetime"].iloc[-1])
         result["bars"].append(
             {"date": last_dt, "mid": None, "upper": None, "lower": None, "atr": None, "unclosed": True}
         )
