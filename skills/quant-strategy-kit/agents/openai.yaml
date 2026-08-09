@@ -1,0 +1,4 @@
+interface:
+  display_name: "量化策略知识库"
+  short_description: "Vibe-Research 私有量化策略与理论：缠论/ATR/威科夫/SMC/做T回测/通俗信号标定"
+  default_prompt: "使用量化策略知识库分析或回测股票信号"
