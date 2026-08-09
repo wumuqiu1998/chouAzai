@@ -1103,6 +1103,13 @@ function KLineModal({
       : label === "底" ? "#22c55e"
       : label.startsWith("S") || label === "警" ? "#3b82f6"
       : "#ef4444"; // B1/B2/B3 等看涨
+    const minuteColorKey = (label: string) =>
+      label === "积" || label === "底" || label === "破" ? "c1"
+      : label === "派" ? "c2"
+      : label === "扫" ? "c3"
+      : label === "变" ? "c5"
+      : label.startsWith("S") || label === "警" ? "c6"
+      : "c4"; // 顶 / 突 / B1/B2/B3
     const last = pts[pts.length - 1].price;
     const lineColor = last >= minute.prev_close ? "#ef4444" : "#22c55e";
     const chg = minute.prev_close ? ((last - minute.prev_close) / minute.prev_close) * 100 : null;
@@ -1310,12 +1317,13 @@ function KLineModal({
                     return {
                       value: [i, bullish ? pts[i].price - gap : pts[i].price + gap],
                       color: minuteLabelColor(s.label),
+                      colorKey: minuteColorKey(s.label),
                       label: s.label,
                       time: s.time,
                       note: s.note,
                     };
                   })
-                  .filter((v): v is { value: [number, number]; color: string; label: string; time: string; note: string } => v !== null),
+                  .filter((v): v is { value: [number, number]; color: string; colorKey: string; label: string; time: string; note: string } => v !== null),
                 symbol: "circle",
                 symbolSize: 6,
                 itemStyle: {
@@ -1325,7 +1333,18 @@ function KLineModal({
                 label: {
                   show: true,
                   position: "inside",
-                  color: (p: unknown) => (p as { data?: { color?: string } }).data?.color ?? "#fff",
+                  rich: {
+                    c1: { color: "#22c55e" },
+                    c2: { color: "#f97316" },
+                    c3: { color: "#e11d48" },
+                    c4: { color: "#ef4444" },
+                    c5: { color: "#f59e0b" },
+                    c6: { color: "#3b82f6" },
+                  },
+                  formatter: (p: unknown) => {
+                    const d = p as { data?: { colorKey?: string; label?: string } };
+                    return `{${d.data?.colorKey ?? "c4"}|${d.data?.label ?? ""}}`;
+                  },
                   fontSize: 10,
                   fontWeight: 800,
                   backgroundColor: "rgba(0,0,0,.55)",
