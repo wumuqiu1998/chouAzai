@@ -64,6 +64,15 @@ interface MinuteData {
   points: Array<{ time: string; price: number; avg_price: number; volume: number }>;
 }
 
+interface DayRefData {
+  ref_date: string;
+  ref_bar: { open: number; high: number; low: number; close: number; volume: number };
+  prev_close: number;
+  chan_points: Array<{ kind: string; date: string; price: number; note: string }>;
+  atr: { mid: number | null; upper: number | null; lower: number | null };
+  zhongshu: Array<{ start_date: string; end_date: string; zd: number; zg: number }>;
+}
+
 interface ChanData {
   points: Array<{ kind: string; date: string; price: number; note: string }>;
   zhongshu: Array<{ start_date: string; end_date: string; zd: number; zg: number }>;
@@ -176,6 +185,12 @@ async function fetchMinute(code: string): Promise<MinuteData> {
   const j = (await resp.json()) as { data?: MinuteData };
   if (!j.data) throw new Error("分时暂无数据");
   return j.data;
+}
+
+async function fetchDayRef(code: string): Promise<DayRefData> {
+  const resp = await fetch(`/api/quant/day-ref?code=${code}&offset=120`, { headers: authHeaders() });
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  return (await resp.json()) as DayRefData;
 }
 
 async function fetchChan(code: string, category: number, offset: number, window?: number, excludeLast = false): Promise<ChanData> {
@@ -307,6 +322,7 @@ function KLineModal({
   const [tab, setTab] = useState<string>("minute");
   const [bars, setBars] = useState<Array<Record<string, unknown>>>([]);
   const [minute, setMinute] = useState<MinuteData | null>(null);
+  const [dayRefData, setDayRefData] = useState<DayRefData | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [reload, setReload] = useState(0);
@@ -434,6 +450,23 @@ function KLineModal({
       cancelled = true;
     };
   }, [chanOn, code, tab, barCount, atrWindow, excludeLast]);
+
+  // 分时“昨日参考位”：昨高低/ATR通道/中枢/缠论买卖点（仅分时 tab）
+  useEffect(() => {
+    if (tab !== "minute") {
+      setDayRefData(null);
+      return;
+    }
+    let cancelled = false;
+    fetchDayRef(code)
+      .then((d) => {
+        if (!cancelled) setDayRefData(d);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [code, tab]);
 
   // ATR 通道（超涨/超跌/顶底）
   useEffect(() => {
@@ -1214,6 +1247,62 @@ function KLineModal({
                 lineStyle: { color: "rgba(34,197,94,.7)", type: "dashed", width: 1.5 },
                 label: { color: "#22c55e", formatter: `跌停 -${(limitPct * 100).toFixed(0)}%` },
               },
+              ...(dayRefData
+                ? [
+                    {
+                      yAxis: dayRefData.ref_bar.high,
+                      lineStyle: { color: "rgba(251,191,36,.7)", type: "dashed", width: 1 },
+                      label: { color: "#fbbf24", formatter: `昨高 ${dayRefData.ref_bar.high}` },
+                    },
+                    {
+                      yAxis: dayRefData.ref_bar.low,
+                      lineStyle: { color: "rgba(52,211,153,.7)", type: "dashed", width: 1 },
+                      label: { color: "#34d399", formatter: `昨低 ${dayRefData.ref_bar.low}` },
+                    },
+                    ...(dayRefData.atr.upper != null
+                      ? [
+                          {
+                            yAxis: dayRefData.atr.upper,
+                            lineStyle: { color: "rgba(249,115,22,.65)", type: "dashed", width: 1 },
+                            label: { color: "#f97316", formatter: `ATR上 ${dayRefData.atr.upper}` },
+                          },
+                        ]
+                      : []),
+                    ...(dayRefData.atr.lower != null
+                      ? [
+                          {
+                            yAxis: dayRefData.atr.lower,
+                            lineStyle: { color: "rgba(6,182,212,.65)", type: "dashed", width: 1 },
+                            label: { color: "#06b6d4", formatter: `ATR下 ${dayRefData.atr.lower}` },
+                          },
+                        ]
+                      : []),
+                    ...(dayRefData.zhongshu.slice(-1).flatMap((z) => [
+                      {
+                        yAxis: z.zd,
+                        lineStyle: { color: "rgba(96,165,250,.6)", type: "dotted", width: 1 },
+                        label: { color: "#60a5fa", formatter: `中枢下 ${z.zd}` },
+                      },
+                      {
+                        yAxis: z.zg,
+                        lineStyle: { color: "rgba(96,165,250,.6)", type: "dotted", width: 1 },
+                        label: { color: "#60a5fa", formatter: `中枢上 ${z.zg}` },
+                      },
+                    ])),
+                    ...dayRefData.chan_points.slice(-4).map((p) => ({
+                      yAxis: p.price,
+                      lineStyle: {
+                        color: p.kind.startsWith("buy") ? "rgba(239,68,68,.65)" : "rgba(59,130,246,.65)",
+                        type: "dashed" as const,
+                        width: 1,
+                      },
+                      label: {
+                        color: p.kind.startsWith("buy") ? "#ef4444" : "#3b82f6",
+                        formatter: `${p.kind.toUpperCase()} ${p.price}`,
+                      },
+                    })),
+                  ]
+                : []),
             ],
           },
         },
