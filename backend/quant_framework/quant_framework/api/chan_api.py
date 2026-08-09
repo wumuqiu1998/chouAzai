@@ -12,8 +12,17 @@ router = APIRouter(prefix="/api/quant/chan", tags=["quant-chan"])
 
 
 @router.get("/analyze")
-def chan_analyze(code: str = Query(...), category: int = Query(4), offset: int = Query(250, ge=60, le=800)):
-    """返回缠论结构：bars + points(买卖点) + zhongshu(中枢) + bi(笔)。"""
+def chan_analyze(
+    code: str = Query(...),
+    category: int = Query(4),
+    offset: int = Query(250, ge=60, le=800),
+    exclude_last: bool = Query(False),
+):
+    """返回缠论结构：bars + points(买卖点) + zhongshu(中枢) + bi(笔)。
+
+    exclude_last=True 用于盘中实时：最后一根 K 线尚未收盘，不参与结构确认，
+    避免指标引用未完成 K 线（保守口径，只用已收盘数据）。
+    """
     import astock as astock_mod
 
     try:
@@ -24,4 +33,7 @@ def chan_analyze(code: str = Query(...), category: int = Query(4), offset: int =
         raise HTTPException(status_code=404, detail="K线数据为空")
     df = pd.DataFrame(rows)
     df["datetime"] = pd.to_datetime(df["datetime"])
-    return analyze_chan(df)
+    analyze_df = df.iloc[:-1] if exclude_last else df
+    result = analyze_chan(analyze_df)
+    result["exclude_last"] = exclude_last
+    return result

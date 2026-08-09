@@ -19,8 +19,13 @@ def atr_analyze(
     period: int = Query(14, ge=2, le=60),
     mult: float = Query(2.5, ge=0.5, le=6.0),
     ma_period: int = Query(20, ge=5, le=120),
+    exclude_last: bool = Query(False),
 ):
-    """返回 ATR 通道（bars 与 K 线对齐）+ 超涨/超跌/顶底信号。"""
+    """返回 ATR 通道（bars 与 K 线对齐）+ 超涨/超跌/顶底信号。
+
+    exclude_last=True 用于盘中实时：最后一根未收盘 K 线不参与计算，
+    bars 末尾补一条空值占位（unclosed=True），保持与 K 线索引对齐。
+    """
     import astock as astock_mod
 
     try:
@@ -31,7 +36,15 @@ def atr_analyze(
         raise HTTPException(status_code=404, detail="K线数据为空")
     df = pd.DataFrame(rows)
     df["datetime"] = pd.to_datetime(df["datetime"])
-    return compute_atr(df, period=period, mult=mult, ma_period=ma_period)
+    analyze_df = df.iloc[:-1] if exclude_last else df
+    result = compute_atr(analyze_df, period=period, mult=mult, ma_period=ma_period)
+    if exclude_last:
+        last_dt = str(df["datetime"].iloc[-1])
+        result["bars"].append(
+            {"date": last_dt, "mid": None, "upper": None, "lower": None, "atr": None, "unclosed": True}
+        )
+    result["exclude_last"] = exclude_last
+    return result
 
 
 @router.get("/stats")
