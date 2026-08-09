@@ -73,6 +73,20 @@ interface DayRefData {
   zhongshu: Array<{ start_date: string; end_date: string; zd: number; zg: number }>;
 }
 
+interface MinuteSignal {
+  time?: string;
+  date?: string;
+  label: string;
+  kind: string;
+  price: number;
+  note: string;
+}
+
+interface MinuteSignalsData {
+  intraday: MinuteSignal[];
+  recent: MinuteSignal[];
+}
+
 interface ChanData {
   points: Array<{ kind: string; date: string; price: number; note: string }>;
   zhongshu: Array<{ start_date: string; end_date: string; zd: number; zg: number }>;
@@ -191,6 +205,12 @@ async function fetchDayRef(code: string): Promise<DayRefData> {
   const resp = await fetch(`/api/quant/day-ref?code=${code}&offset=120`, { headers: authHeaders() });
   if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
   return (await resp.json()) as DayRefData;
+}
+
+async function fetchMinuteSignals(code: string): Promise<MinuteSignalsData> {
+  const resp = await fetch(`/api/quant/minute-signals?code=${code}`, { headers: authHeaders() });
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  return (await resp.json()) as MinuteSignalsData;
 }
 
 async function fetchChan(code: string, category: number, offset: number, window?: number, excludeLast = false): Promise<ChanData> {
@@ -320,9 +340,11 @@ function KLineModal({
   onClose: () => void;
 }) {
   const [tab, setTab] = useState<string>("minute");
+  const [maximized, setMaximized] = useState(false);
   const [bars, setBars] = useState<Array<Record<string, unknown>>>([]);
   const [minute, setMinute] = useState<MinuteData | null>(null);
   const [dayRefData, setDayRefData] = useState<DayRefData | null>(null);
+  const [minuteSignals, setMinuteSignals] = useState<MinuteSignalsData | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [reload, setReload] = useState(0);
@@ -461,6 +483,23 @@ function KLineModal({
     fetchDayRef(code)
       .then((d) => {
         if (!cancelled) setDayRefData(d);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [code, tab]);
+
+  // 分时通俗信号（顶/底/B/S/扫/突/破/变 + 近期积/派/扫/突/破/变参考位）
+  useEffect(() => {
+    if (tab !== "minute") {
+      setMinuteSignals(null);
+      return;
+    }
+    let cancelled = false;
+    fetchMinuteSignals(code)
+      .then((d) => {
+        if (!cancelled) setMinuteSignals(d);
       })
       .catch(() => {});
     return () => {
@@ -1052,6 +1091,16 @@ function KLineModal({
     if (!chart || tab !== "minute" || !minute || minute.points.length === 0) return;
     const pts = minute.points;
     const times = pts.map((p) => fmtMinuteTime(p.time));
+    const timeIdx = new Map(pts.map((p, i) => [p.time, i]));
+    const minuteLabelColor = (label: string) =>
+      label === "积" ? "#22c55e"
+      : label === "派" ? "#f97316"
+      : label === "扫" ? "#e11d48"
+      : label === "突" ? "#ef4444"
+      : label === "破" ? "#22c55e"
+      : label === "变" ? "#f59e0b"
+      : label === "顶" || label.startsWith("S") || label === "警" ? "#3b82f6"
+      : "#ef4444"; // 底 / B1/B2/B3 等看涨
     const last = pts[pts.length - 1].price;
     const lineColor = last >= minute.prev_close ? "#ef4444" : "#22c55e";
     const chg = minute.prev_close ? ((last - minute.prev_close) / minute.prev_close) * 100 : null;
@@ -1111,7 +1160,11 @@ function KLineModal({
           return `${fmtMinuteTime(p.time)}<br/>价 ${p.price.toFixed(2)}　均价 ${p.avg_price.toFixed(2)}<br/>涨幅 <span style="color:${col}">${chgPct >= 0 ? "+" : ""}${chgPct.toFixed(2)}%</span><br/>${maText}<br/>量 ${fmt(p.volume)}`;
         },
       },
-      legend: { data: ["价格", "均价", "成交量", "MA5", "MA10", "MA20"], textStyle: { color: "#a8a29e" }, top: 0 },
+      legend: {
+        data: ["价格", "均价", "成交量", "MA5", "MA10", "MA20", ...(minuteSignals && minuteSignals.intraday.length > 0 ? ["分时信号"] : [])],
+        textStyle: { color: "#a8a29e" },
+        top: 0,
+      },
       graphic: [
         {
           type: "text",
@@ -1230,10 +1283,61 @@ function KLineModal({
                     })),
                   ]
                 : []),
+              ...(minuteSignals && minuteSignals.recent.length > 0
+                ? minuteSignals.recent.slice(-6).map((s) => ({
+                    yAxis: s.price,
+                    lineStyle: { color: "rgba(168,162,158,.4)", type: "dotted", width: 1 },
+                    label: { color: "#a8a29e", formatter: `${s.label} ${s.price}` },
+                  }))
+                : []),
             ],
           },
         },
         ...maSeries,
+        ...(minuteSignals && minuteSignals.intraday.length > 0
+          ? [
+              {
+                name: "分时信号",
+                type: "scatter" as const,
+                data: minuteSignals.intraday
+                  .map((s) => {
+                    const i = timeIdx.get(s.time ?? "");
+                    if (i === undefined) return null;
+                    const gap = (hi - lo) * 0.012;
+                    const bullish = ["底", "B1", "B2", "B3", "积", "突"].includes(s.label);
+                    return {
+                      value: [i, bullish ? pts[i].price - gap : pts[i].price + gap],
+                      color: minuteLabelColor(s.label),
+                      label: s.label,
+                      time: s.time,
+                      note: s.note,
+                    };
+                  })
+                  .filter((v): v is { value: [number, number]; color: string; label: string; time: string; note: string } => v !== null),
+                symbol: "circle",
+                symbolSize: 6,
+                itemStyle: { color: "#a8a29e", opacity: 0.65 },
+                label: {
+                  show: true,
+                  position: "inside",
+                  color: (p: unknown) => (p as { data?: { color?: string } }).data?.color ?? "#fff",
+                  fontSize: 10,
+                  fontWeight: 800,
+                  backgroundColor: "rgba(0,0,0,.55)",
+                  padding: [1, 2],
+                  borderRadius: 2,
+                },
+                tooltip: {
+                  show: true,
+                  formatter: (p: unknown) => {
+                    const it = p as { data?: { label?: string; time?: string; note?: string } };
+                    return it.data ? `<b>${it.data.label}</b>（${fmtMinuteTime(it.data.time ?? "")}）<br/>${it.data.note ?? ""}` : "";
+                  },
+                },
+                z: 10,
+              },
+            ]
+          : []),
         {
           name: "均价",
           type: "line",
@@ -1253,7 +1357,7 @@ function KLineModal({
         },
       ],
     });
-  }, [tab, minute]);
+  }, [tab, minute, minuteSignals]);
 
   const isMinute = tab === "minute";
   const hasData = isMinute ? !!minute && minute.points.length > 0 : bars.length > 0;
@@ -1312,7 +1416,14 @@ function KLineModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm" onClick={onClose}>
-      <div className="glass flex h-[88vh] w-[min(94vw,980px)] flex-col p-4" onClick={(e) => e.stopPropagation()}>
+      <div
+        className={
+          maximized
+            ? "glass fixed inset-0 z-[60] flex h-full w-full flex-col p-2"
+            : "glass flex h-[88vh] w-[min(94vw,980px)] flex-col p-4"
+        }
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="mb-2 flex items-center gap-2">
           <LineChart className="h-4 w-4 text-primary" />
           <span className="font-semibold">{name}</span>
@@ -1394,6 +1505,16 @@ function KLineModal({
             title="缩放时按可见窗口重新计算均线/缠论/ATR；关闭后指标基于全量数据（专业模式）"
           >
             跟随{followZoom ? "开" : "关"}
+          </button>
+          <button
+            onClick={() => {
+              setMaximized((v) => !v);
+              window.setTimeout(() => chartRef.current?.resize(), 80);
+            }}
+            className="ml-2 text-muted-foreground hover:text-foreground"
+            title={maximized ? "还原窗口" : "最大化窗口"}
+          >
+            {maximized ? "还原" : "全屏"}
           </button>
           <button onClick={onClose} className="ml-auto text-muted-foreground hover:text-foreground" title="关闭">
             <X className="h-4 w-4" />

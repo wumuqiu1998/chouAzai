@@ -83,6 +83,7 @@ try:
     from quant_framework.api import config_api as quant_config_api
     from quant_framework.api import day_ref_api as quant_day_ref_api
     from quant_framework.api import experiments_api as quant_experiments_api
+    from quant_framework.api import minute_signals_api as quant_minute_signals_api
     from quant_framework.api import smc_api as quant_smc_api
 
     app.include_router(quant_config_api.router)
@@ -91,6 +92,7 @@ try:
     app.include_router(quant_audit_api.router)
     app.include_router(quant_chan_api.router)
     app.include_router(quant_day_ref_api.router)
+    app.include_router(quant_minute_signals_api.router)
     app.include_router(quant_atr_api.router)
     app.include_router(quant_smc_api.router)
 except ImportError as _qf_exc:  # noqa: F841
