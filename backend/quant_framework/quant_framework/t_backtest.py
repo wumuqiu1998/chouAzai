@@ -32,6 +32,9 @@ def run_t_backtest(
     min_warmup: int = 60,
     regime: dict | None = None,
     df: pd.DataFrame | None = None,
+    extra_points: list[dict] | None = None,
+    include_warns: bool = False,
+    skip_native_kinds: tuple[str, ...] = (),
 ) -> dict:
     if df is None:
         import astock
@@ -66,10 +69,13 @@ def run_t_backtest(
         res = analyze_chan(df.iloc[: i + 1])
         # 分型/笔需要下一根 K 线确认：点所在 bar = 上一根 bar 时，说明刚被当前 bar 确认
         prev_key = _dt_key(dts[i - 1])
-        for p in res["points"]:
+        all_pts = [p for p in res["points"] if p["kind"] not in skip_native_kinds]
+        if extra_points:
+            all_pts += [ep for ep in extra_points if ep.get("date") == prev_key]
+        for p in all_pts:
             if p["date"] != prev_key:
                 continue
-            if p["kind"].endswith("_warn"):
+            if p["kind"].endswith("_warn") and not include_warns:
                 continue  # 三卖/中枢破坏预警只是提示，不直接作为做T交易信号
             if i + 1 >= len(df) or pd.Timestamp(dts[i + 1]).date() != cur.date():
                 continue  # 下一根跨日：做T不隔夜，跳过
