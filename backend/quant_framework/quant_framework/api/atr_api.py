@@ -16,6 +16,7 @@ def atr_analyze(
     code: str = Query(...),
     category: int = Query(4),
     offset: int = Query(250, ge=60, le=800),
+    window: int | None = Query(None, ge=20, le=800),
     period: int = Query(14, ge=2, le=60),
     mult: float = Query(2.5, ge=0.5, le=6.0),
     ma_period: int = Query(20, ge=5, le=120),
@@ -23,6 +24,7 @@ def atr_analyze(
 ):
     """返回 ATR 通道（bars 与 K 线对齐）+ 超涨/超跌/顶底信号。
 
+    window：只分析最近 N 根 K 线（缩放跟随窗口用，K 线本体不变）；
     exclude_last=True 用于盘中实时：最后一根未收盘 K 线不参与计算，
     bars 末尾补一条空值占位（unclosed=True），保持与 K 线索引对齐。
     """
@@ -36,6 +38,8 @@ def atr_analyze(
         raise HTTPException(status_code=404, detail="K线数据为空")
     df = pd.DataFrame(rows)
     df["datetime"] = pd.to_datetime(df["datetime"])
+    if window is not None:
+        df = df.tail(window)
     analyze_df = df.iloc[:-1] if exclude_last else df
     result = compute_atr(analyze_df, period=period, mult=mult, ma_period=ma_period)
     if exclude_last:

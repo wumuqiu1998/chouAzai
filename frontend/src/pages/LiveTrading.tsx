@@ -127,9 +127,9 @@ async function fetchMinute(code: string): Promise<MinuteData> {
   return j.data;
 }
 
-async function fetchChan(code: string, category: number, offset: number, excludeLast = false): Promise<ChanData> {
+async function fetchChan(code: string, category: number, offset: number, window?: number, excludeLast = false): Promise<ChanData> {
   const resp = await fetch(
-    `/api/quant/chan/analyze?code=${code}&category=${category}&offset=${offset}&exclude_last=${excludeLast ? 1 : 0}`,
+    `/api/quant/chan/analyze?code=${code}&category=${category}&offset=${offset}&window=${window ?? ""}&exclude_last=${excludeLast ? 1 : 0}`,
     {
     headers: authHeaders(),
     },
@@ -138,9 +138,9 @@ async function fetchChan(code: string, category: number, offset: number, exclude
   return (await resp.json()) as ChanData;
 }
 
-async function fetchAtr(code: string, category: number, offset: number, excludeLast = false): Promise<AtrData> {
+async function fetchAtr(code: string, category: number, offset: number, window?: number, excludeLast = false): Promise<AtrData> {
   const resp = await fetch(
-    `/api/quant/atr/analyze?code=${code}&category=${category}&offset=${offset}&exclude_last=${excludeLast ? 1 : 0}`,
+    `/api/quant/atr/analyze?code=${code}&category=${category}&offset=${offset}&window=${window ?? ""}&exclude_last=${excludeLast ? 1 : 0}`,
     {
     headers: authHeaders(),
     },
@@ -240,10 +240,10 @@ function KLineModal({
   // 盘中实时：最后一根 K 线未收盘，指标只使用已收盘数据（排除末根）
   const excludeLast = tab !== "minute" && isTradingHours();
   const [barCount, setBarCount] = useState(250);
-  // 跟随缩放：dataZoom 后按可见根数重新拉数据并重算指标
+  // 跟随缩放：dataZoom 后按可见根数重算指标（K 线本体固定，不重载）
   const [viewCount, setViewCount] = useState(250);
-  // 请求根数 = 可见根数 + 左侧缓冲（保证窗口内 MA20/ATR/缠论完整）
-  const [fetchCount, setFetchCount] = useState(375);
+  // 指标分析窗口 = 可见根数 + 左侧缓冲（保证窗口内 MA20/ATR/缠论完整）
+  const atrWindow = Math.min(barCount, viewCount + 120);
   const [followZoom, setFollowZoom] = useState(true);
   const zoomTimerRef = useRef<number | null>(null);
   const ignoreZoomRef = useRef(false);
@@ -251,21 +251,14 @@ function KLineModal({
   const tabRef = useRef(tab);
   const barsRef = useRef(bars);
   const viewCountRef = useRef(viewCount);
-  const fetchCountRef = useRef(fetchCount);
   const barCountRef = useRef(barCount);
   useEffect(() => {
     followZoomRef.current = followZoom;
     tabRef.current = tab;
     barsRef.current = bars;
     viewCountRef.current = viewCount;
-    fetchCountRef.current = fetchCount;
     barCountRef.current = barCount;
-  }, [followZoom, tab, bars, viewCount, fetchCount, barCount]);
-
-  // 可见根数 → 请求根数（含缓冲，上限 800）
-  useEffect(() => {
-    setFetchCount(Math.min(800, Math.max(120, Math.round(viewCount * 1.5))));
-  }, [viewCount]);
+  }, [followZoom, tab, bars, viewCount, barCount]);
 
   useEffect(() => {
     let cancelled = false;
@@ -293,14 +286,14 @@ function KLineModal({
         });
     } else {
       const category = Number(tab);
-      const cacheKey = `${code}-${tab}-${fetchCount}-${excludeLast ? "u" : "c"}`;
+      const cacheKey = `${code}-${tab}-${barCount}-${excludeLast ? "u" : "c"}`;
       const cached = cacheRef.current[cacheKey]?.bars;
       if (cached) {
         setBars(cached);
         setLoading(false);
         return;
       }
-      fetchKline(code, category, fetchCount)
+      fetchKline(code, category, barCount)
         .then((rows) => {
           if (cancelled) return;
           cacheRef.current[cacheKey] = {
@@ -323,7 +316,7 @@ function KLineModal({
     return () => {
       cancelled = true;
     };
-  }, [code, tab, reload, fetchCount, excludeLast]);
+  }, [code, tab, reload, barCount, excludeLast]);
 
   // 缠论结构（买卖点/中枢/笔）
   useEffect(() => {
@@ -332,13 +325,13 @@ function KLineModal({
       return;
     }
     let cancelled = false;
-    const key = `${code}-${tab}-${fetchCount}-${excludeLast ? "u" : "c"}`;
+    const key = `${code}-${tab}-${atrWindow}-${excludeLast ? "u" : "c"}`;
     const cached = chanCacheRef.current[key];
     if (cached) {
       setChanData(cached);
       return;
     }
-    fetchChan(code, Number(tab), fetchCount, excludeLast)
+    fetchChan(code, Number(tab), barCount, atrWindow, excludeLast)
       .then((d) => {
         if (cancelled) return;
         chanCacheRef.current[key] = d;
@@ -348,7 +341,7 @@ function KLineModal({
     return () => {
       cancelled = true;
     };
-  }, [chanOn, code, tab, fetchCount, excludeLast]);
+  }, [chanOn, code, tab, barCount, atrWindow, excludeLast]);
 
   // ATR 通道（超涨/超跌/顶底）
   useEffect(() => {
@@ -357,13 +350,13 @@ function KLineModal({
       return;
     }
     let cancelled = false;
-    const key = `${code}-${tab}-${fetchCount}-${excludeLast ? "u" : "c"}`;
+    const key = `${code}-${tab}-${atrWindow}-${excludeLast ? "u" : "c"}`;
     const cached = atrCacheRef.current[key];
     if (cached) {
       setAtrData(cached);
       return;
     }
-    fetchAtr(code, Number(tab), fetchCount, excludeLast)
+    fetchAtr(code, Number(tab), barCount, atrWindow, excludeLast)
       .then((d) => {
         if (cancelled) return;
         atrCacheRef.current[key] = d;
@@ -373,7 +366,7 @@ function KLineModal({
     return () => {
       cancelled = true;
     };
-  }, [atrOn, code, tab, fetchCount, excludeLast]);
+  }, [atrOn, code, tab, barCount, atrWindow, excludeLast]);
 
   // 盘中自动刷新：交易时段每 15 秒重拉当前周期数据，涨幅/图表实时更新
   useEffect(() => {
@@ -394,9 +387,9 @@ function KLineModal({
             setPrevClose((p) => p ?? d.prev_close);
           }
         } else {
-          const rows = await fetchKline(code, Number(tab), fetchCount);
+          const rows = await fetchKline(code, Number(tab), barCount);
           if (!cancelled) {
-            const cacheKey = `${code}-${tab}-${fetchCount}-${excludeLast ? "u" : "c"}`;
+            const cacheKey = `${code}-${tab}-${barCount}-${excludeLast ? "u" : "c"}`;
             cacheRef.current[cacheKey] = {
               ...cacheRef.current[cacheKey],
               bars: rows,
@@ -414,7 +407,7 @@ function KLineModal({
       cancelled = true;
       if (timer !== null) window.clearTimeout(timer);
     };
-  }, [code, tab, fetchCount, excludeLast]);
+  }, [code, tab, barCount, excludeLast]);
 
   // 初始化 chart 实例（容器常驻，只创建一次）
   useEffect(() => {
@@ -479,12 +472,15 @@ function KLineModal({
     const chgColor = chg == null ? "#a8a29e" : chg >= 0 ? "#ef4444" : "#22c55e";
     const pc = prevClose ?? prevBar?.c ?? null;
     const withPc = data.map((b, i) => ({ ...b, pc: i > 0 ? data[i - 1].c : pc ?? b.c }));
-    // 数据含左侧缓冲：默认只显示末尾 viewCount 根（指标基于含缓冲的全量计算，窗口内完整）
-    const zoomStart = fetchCount > viewCount ? Math.round((1 - viewCount / fetchCount) * 100) : 0;
+    // K 线固定 barCount 根：默认只显示末尾 viewCount 根（指标基于 atrWindow 含缓冲计算）
+    const zoomStart = barCount > viewCount ? Math.round((1 - viewCount / barCount) * 100) : 0;
     const legendData = ["K线", "MA5", "MA10", "MA20", "MA60", "成交量"];
     const extraSeries: object[] = [];
-    // 盘中实时：MA 只用已收盘 K 线（排除未收盘末根），末尾补 null 保持索引对齐
-    const maCloses = excludeLast ? data.slice(0, -1).map((b) => b.c) : data.map((b) => b.c);
+    // MA 基于末尾 atrWindow 根（含左侧缓冲），前面补 null 与 K 线索引对齐；
+    // 盘中实时再排除未收盘末根，末尾补 null 保持索引对齐
+    const maRaw = excludeLast ? data.slice(-atrWindow, -1) : data.slice(-atrWindow);
+    const maPad = data.length - maRaw.length;
+    const maCloses = maRaw.map((b) => b.c);
     if (chanOn && chanData && (chanData.points.length > 0 || chanData.bi.length > 0)) {
       const idxOf = new Map(data.map((b, i) => [b.date.slice(0, 16), i]));
       const biLine = chanData.bi
@@ -689,8 +685,8 @@ function KLineModal({
           : []),
       ],
       grid: [
-        { left: 56, right: 16, top: 28, height: "56%" },
-        { left: 56, right: 16, top: "72%", height: "18%" },
+        { left: 56, right: 16, top: 28, height: "66%" },
+        { left: 56, right: 16, top: "78%", height: "16%" },
       ],
       xAxis: [
         { type: "category", data: data.map((b) => b.date), axisLabel: { color: "#a8a29e" } },
@@ -727,7 +723,7 @@ function KLineModal({
         ].map(([period, maName, maColor]) => ({
           name: maName as string,
           type: "line" as const,
-          data: [...movingAverage(maCloses, period as number), ...(excludeLast ? [null] : [])],
+          data: [...Array<number | null>(maPad).fill(null), ...movingAverage(maCloses, period as number)],
           showSymbol: false,
           lineStyle: { width: 1, color: maColor as string },
           emphasis: { disabled: true },
@@ -746,7 +742,7 @@ function KLineModal({
         ...extraSeries,
       ],
     });
-  }, [tab, bars, prevClose, chanOn, chanData, atrOn, atrData, fetchCount, viewCount, excludeLast]);
+  }, [tab, bars, prevClose, chanOn, chanData, atrOn, atrData, barCount, viewCount, atrWindow, excludeLast]);
 
   // 分时 option
   useEffect(() => {
@@ -925,7 +921,7 @@ function KLineModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm" onClick={onClose}>
-      <div className="glass flex h-[72vh] w-[min(92vw,860px)] flex-col p-4" onClick={(e) => e.stopPropagation()}>
+      <div className="glass flex h-[88vh] w-[min(94vw,980px)] flex-col p-4" onClick={(e) => e.stopPropagation()}>
         <div className="mb-2 flex items-center gap-2">
           <LineChart className="h-4 w-4 text-primary" />
           <span className="font-semibold">{name}</span>

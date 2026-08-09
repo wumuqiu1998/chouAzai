@@ -16,10 +16,12 @@ def chan_analyze(
     code: str = Query(...),
     category: int = Query(4),
     offset: int = Query(250, ge=60, le=800),
+    window: int | None = Query(None, ge=20, le=800),
     exclude_last: bool = Query(False),
 ):
     """返回缠论结构：bars + points(买卖点) + zhongshu(中枢) + bi(笔)。
 
+    window：只分析最近 N 根 K 线（缩放跟随窗口用，K 线本体不变）；
     exclude_last=True 用于盘中实时：最后一根 K 线尚未收盘，不参与结构确认，
     避免指标引用未完成 K 线（保守口径，只用已收盘数据）。
     """
@@ -33,6 +35,8 @@ def chan_analyze(
         raise HTTPException(status_code=404, detail="K线数据为空")
     df = pd.DataFrame(rows)
     df["datetime"] = pd.to_datetime(df["datetime"])
+    if window is not None:
+        df = df.tail(window)
     analyze_df = df.iloc[:-1] if exclude_last else df
     result = analyze_chan(analyze_df)
     result["exclude_last"] = exclude_last
