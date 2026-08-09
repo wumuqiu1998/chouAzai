@@ -8,6 +8,7 @@ from quant_framework.chan import (
     find_fractals,
     find_zhongshu,
     merge_contained,
+    zhongshu_break_warns,
 )
 
 
@@ -97,7 +98,7 @@ def test_analyze_chan_structure():
     assert set(res) == {"bars", "points", "zhongshu", "bi", "params"}
     assert len(res["bars"]) == n
     for p in res["points"]:
-        assert p["kind"] in {"buy1", "buy2", "buy3", "sell1", "sell2", "sell3"}
+        assert p["kind"] in {"buy1", "buy2", "buy3", "sell1", "sell2", "sell3", "sell3_warn"}
 
 
 def test_multiple_same_kind_points_allowed_when_far_apart():
@@ -120,3 +121,35 @@ def test_multiple_same_kind_points_allowed_when_far_apart():
     # 默认 gap=20：紧邻的重复点被过滤
     pts20 = buy_sell_points(bis, zhongshu, min_same_kind_gap=20)
     assert sum(1 for p in pts20 if p["kind"] == "buy1") == 1
+
+
+def test_zhongshu_break_warn():
+    zs = [
+        {
+            "start_pos": 0,
+            "end_pos": 2,
+            "start_date": "2026-06-01",
+            "end_date": "2026-06-03",
+            "zd": 10.0,
+            "zg": 12.0,
+        }
+    ]
+    bars = [
+        {"datetime": "2026-06-01", "close": 10},
+        {"datetime": "2026-06-02", "close": 11},
+        {"datetime": "2026-06-03", "close": 12},
+        {"datetime": "2026-06-04", "close": 13},   # 中枢结束后仍在 ZG 上方
+        {"datetime": "2026-06-05", "close": 11.5},  # 收盘跌破 ZG=12 → 预警
+    ]
+    warns = zhongshu_break_warns(bars, zs)
+    assert len(warns) == 1
+    assert warns[0]["kind"] == "sell3_warn"
+    assert warns[0]["date"] == "2026-06-05"
+    assert "ZG=12.00" in warns[0]["note"]
+
+    # 未跌破 ZG → 无预警
+    bars_ok = [
+        {"datetime": "2026-06-04", "close": 13},
+        {"datetime": "2026-06-05", "close": 12.5},
+    ]
+    assert zhongshu_break_warns(bars_ok, zs) == []

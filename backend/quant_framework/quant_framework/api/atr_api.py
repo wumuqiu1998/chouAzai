@@ -20,6 +20,9 @@ def atr_analyze(
     period: int = Query(14, ge=2, le=60),
     mult: float = Query(2.5, ge=0.5, le=6.0),
     ma_period: int = Query(20, ge=5, le=120),
+    confirm_amp_mult: float = Query(1.0, ge=0.0, le=5.0),
+    min_same_kind_gap: int = Query(5, ge=0, le=60),
+    max_confirm_bars: int = Query(3, ge=1, le=10),
     exclude_last: bool = Query(False),
 ):
     """返回 ATR 通道（bars 与 K 线对齐）+ 超涨/超跌/顶底信号。
@@ -41,7 +44,15 @@ def atr_analyze(
     if window is not None:
         df = df.tail(window)
     analyze_df = df.iloc[:-1] if exclude_last else df
-    result = compute_atr(analyze_df, period=period, mult=mult, ma_period=ma_period)
+    result = compute_atr(
+        analyze_df,
+        period=period,
+        mult=mult,
+        ma_period=ma_period,
+        confirm_amp_mult=confirm_amp_mult,
+        min_same_kind_gap=min_same_kind_gap,
+        max_confirm_bars=max_confirm_bars,
+    )
     if exclude_last:
         from quant_framework.atr import _bar_key
 
@@ -61,6 +72,9 @@ def atr_stats(
     period: int = Query(14, ge=2, le=60),
     mult: float = Query(2.5, ge=0.5, le=6.0),
     ma_period: int = Query(20, ge=5, le=120),
+    confirm_amp_mult: float = Query(1.0, ge=0.0, le=5.0),
+    min_same_kind_gap: int = Query(5, ge=0, le=60),
+    max_confirm_bars: int = Query(3, ge=1, le=10),
     horizon: int = Query(5, ge=1, le=20),
 ):
     """顶/底信号样本外统计：信号后 horizon 根 K 线涨跌概率与平均收益。"""
@@ -74,4 +88,13 @@ def atr_stats(
         raise HTTPException(status_code=404, detail="K线数据为空")
     df = pd.DataFrame(rows)
     df["datetime"] = pd.to_datetime(df["datetime"])
-    return atr_signal_stats(df, period=period, mult=mult, ma_period=ma_period, horizon=horizon)
+    return atr_signal_stats(
+        df,
+        period=period,
+        mult=mult,
+        ma_period=ma_period,
+        horizon=horizon,
+        confirm_amp_mult=confirm_amp_mult,
+        min_same_kind_gap=min_same_kind_gap,
+        max_confirm_bars=max_confirm_bars,
+    )

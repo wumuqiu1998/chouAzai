@@ -69,6 +69,8 @@ def run_t_backtest(
         for p in res["points"]:
             if p["date"] != prev_key:
                 continue
+            if p["kind"].endswith("_warn"):
+                continue  # 三卖/中枢破坏预警只是提示，不直接作为做T交易信号
             if i + 1 >= len(df) or pd.Timestamp(dts[i + 1]).date() != cur.date():
                 continue  # 下一根跨日：做T不隔夜，跳过
             signals.append({"exec_i": i + 1, "day": cur.date(), "kind": p["kind"], "price": p["price"]})
@@ -338,6 +340,8 @@ def run_band_t_backtest(
         prev_key = _dt_key(dts[i - 1])
         for p in res["points"]:
             if p["date"] == prev_key:
+                if p["kind"].endswith("_warn"):
+                    continue
                 if p["kind"].startswith("buy"):
                     last_buy_pos = i - 1
                 elif p["kind"].startswith("sell"):

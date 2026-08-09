@@ -52,3 +52,42 @@ def test_atr_signal_stats_shape():
     for v in stats.values():
         assert v["n"] >= 0
         assert 0 <= v["hit_rate"] <= 100
+
+
+def test_atr_small_pullback_no_top():
+    # 超涨段结束后小幅回落（< 1×ATR，但已跌破上轨）→ 不应确认顶
+    closes = [10.0] * 25 + [10.1, 10.3, 10.6, 11.0, 10.55]
+    df = _make_df(np.array(closes))
+    res = compute_atr(df, mult=0.2, confirm_amp_mult=1.0, max_confirm_bars=3)
+    tops = [s for s in res["signals"] if s["kind"] == "top"]
+    assert tops == []
+
+
+def test_atr_big_pullback_confirms_top_with_extreme_price():
+    # 超涨段后大幅回落（≥ 1×ATR）→ 确认顶，且价格取超涨段最高价而非确认日收盘
+    closes = [10.0] * 25 + [10.1, 10.3, 10.6, 11.0, 9.4]
+    df = _make_df(np.array(closes))
+    res = compute_atr(df, mult=0.2, confirm_amp_mult=1.0, max_confirm_bars=3)
+    tops = [s for s in res["signals"] if s["kind"] == "top"]
+    assert len(tops) == 1
+    assert tops[0]["price"] > 11.0  # 超涨段最高价（11.0 × 1.005 附近），而非确认日收盘 9.4
+
+
+def test_atr_delayed_confirmation():
+    # 超涨段结束第一根回落幅度不足，随后一根继续大跌 → 延迟确认顶
+    closes = [10.0] * 25 + [10.1, 10.3, 10.6, 11.0, 10.55, 9.4]
+    df = _make_df(np.array(closes))
+    res = compute_atr(df, mult=0.2, confirm_amp_mult=1.0, max_confirm_bars=3)
+    tops = [s for s in res["signals"] if s["kind"] == "top"]
+    assert len(tops) == 1
+    assert tops[0]["date"] == str(df["datetime"].iloc[-1].date())  # 延迟确认日 = 最后一根
+
+
+def test_atr_min_same_kind_gap():
+    # 两段超涨-大回落，间隔较近时被 gap 过滤；gap=0 时保留两个顶
+    closes = [10.0] * 25 + [10.1, 10.3, 10.6, 11.0, 9.4, 9.6, 9.8, 10.0, 10.2, 10.5, 10.9, 11.3, 9.6]
+    df = _make_df(np.array(closes))
+    res0 = compute_atr(df, mult=0.2, confirm_amp_mult=1.0, min_same_kind_gap=0)
+    res50 = compute_atr(df, mult=0.2, confirm_amp_mult=1.0, min_same_kind_gap=50)
+    assert len([s for s in res0["signals"] if s["kind"] == "top"]) >= 2
+    assert len([s for s in res50["signals"] if s["kind"] == "top"]) == 1

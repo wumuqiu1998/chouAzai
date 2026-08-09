@@ -192,6 +192,46 @@ def buy_sell_points(bis: list[dict], zhongshu: list[dict], min_same_kind_gap: in
     return pts
 
 
+def zhongshu_break_warns(bars: list[dict], zhongshu: list[dict], min_same_kind_gap: int = 20) -> list[dict]:
+    """中枢破坏预警（三卖预警）：向下离开后收盘跌破中枢上沿 ZG。
+
+    严格三卖需要“离开中枢后回抽不破 ZD”，回抽笔确认通常滞后（主升浪后
+    往往要等完整回抽笔形成）。这里在收盘价跌破 ZG 时先给 sell3_warn，
+    比等回抽笔确认提前数根 K 线，供做空/减仓侧预警。
+
+    bars 元素需含 datetime/close；zhongshu 需含 end_date/zg。
+    """
+    candidates: list[dict] = []
+    for z in sorted(zhongshu, key=lambda x: x["start_pos"]):
+        for i, b in enumerate(bars):
+            if str(b["datetime"]) <= str(z["end_date"]):
+                continue
+            try:
+                close = float(b["close"])
+            except (TypeError, ValueError):
+                continue
+            if close < z["zg"]:
+                candidates.append(
+                    {
+                        "kind": "sell3_warn",
+                        "date": str(b["datetime"]),
+                        "price": round(close, 4),
+                        "note": f"收盘跌破中枢上沿 ZG={z['zg']:.2f}，三卖预警（等回抽不破 ZD={z['zd']:.2f} 确认三卖）",
+                        "pos": i,
+                    }
+                )
+                break
+    # 不同中枢的首次跌破日可能不按时间顺序，先按 bar 位置排序再统一做最小间隔过滤
+    candidates.sort(key=lambda x: x["pos"])
+    warns: list[dict] = []
+    last_i = -10**9
+    for c in candidates:
+        if c["pos"] - last_i >= min_same_kind_gap:
+            warns.append(c)
+            last_i = c["pos"]
+    return warns
+
+
 def analyze_chan(df: pd.DataFrame, min_gap: int = 4, min_same_kind_gap: int = 20) -> dict:
     """对 OHLC DataFrame 做缠论分析，返回 bars/points/zhongshu/bi。"""
     df = df.sort_values("datetime").reset_index(drop=True)
@@ -200,18 +240,20 @@ def analyze_chan(df: pd.DataFrame, min_gap: int = 4, min_same_kind_gap: int = 20
     bis = find_bi(fractals, min_gap=min_gap)
     zhongshu = find_zhongshu(bis)
     points = buy_sell_points(bis, zhongshu, min_same_kind_gap=min_same_kind_gap)
+    bars = [
+        {
+            "datetime": _dt_key(r.datetime),
+            "open": float(r.open),
+            "high": float(r.high),
+            "low": float(r.low),
+            "close": float(r.close),
+            "volume": float(getattr(r, "volume", 0) or 0),
+        }
+        for r in df.itertuples()
+    ]
+    points.extend(zhongshu_break_warns(bars, zhongshu, min_same_kind_gap=min_same_kind_gap))
     return {
-        "bars": [
-            {
-                "datetime": _dt_key(r.datetime),
-                "open": float(r.open),
-                "high": float(r.high),
-                "low": float(r.low),
-                "close": float(r.close),
-                "volume": float(getattr(r, "volume", 0) or 0),
-            }
-            for r in df.itertuples()
-        ],
+        "bars": bars,
         "points": points,
         "zhongshu": zhongshu,
         "bi": bis,

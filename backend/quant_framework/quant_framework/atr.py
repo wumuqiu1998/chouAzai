@@ -38,14 +38,23 @@ def compute_atr(
     period: int = 14,
     mult: float = 2.5,
     ma_period: int = 20,
+    confirm_amp_mult: float = 1.0,
+    min_same_kind_gap: int = 5,
+    max_confirm_bars: int = 3,
 ) -> dict:
     """计算 ATR 通道与超涨/超跌/顶底信号。
 
     参数：
-      df       : K线 DataFrame，需含 datetime/open/high/low/close
-      period   : ATR 平滑周期
-      mult     : 通道倍数（上/下轨 = mid ± mult*ATR）
-      ma_period: 中轨均线周期
+      df                : K线 DataFrame，需含 datetime/open/high/low/close
+      period            : ATR 平滑周期
+      mult              : 通道倍数（上/下轨 = mid ± mult*ATR）
+      ma_period         : 中轨均线周期
+      confirm_amp_mult  : 顶/底确认的最小回落/反弹幅度（×ATR）。
+                          仅“超涨后回落 ≥ confirm_amp_mult×ATR”才算顶，
+                          过滤主升浪/主跌浪中的小回调反复触发。
+      min_same_kind_gap : 同类顶/底信号之间的最小 K 线间隔，防止连续抖动重复标记。
+      max_confirm_bars  : 超涨/超跌段结束后，最多再等几根 K 线确认顶/底
+                          （幅度未达阈值时顺延，价格反向则作废）。
 
     返回：
       {
@@ -76,8 +85,6 @@ def compute_atr(
 
     overheat = close > upper
     oversold = close < lower
-    top = overheat.shift(1) & (close < close.shift(1))
-    bottom = oversold.shift(1) & (close > close.shift(1))
 
     bars: list[dict] = []
     for i in range(len(d)):
@@ -92,9 +99,18 @@ def compute_atr(
         )
 
     signals: list[dict] = []
+    last_top_i = -10**9
+    last_bottom_i = -10**9
+    heat_run: dict | None = None   # 当前连续超涨段：段内最高价/日期/段末收盘
+    cold_run: dict | None = None   # 当前连续超跌段
+    heat_pending: dict | None = None
+    cold_pending: dict | None = None
     for i in range(len(d)):
         date = _bar_key(d["datetime"].iloc[i])
-        if pd.notna(overheat.iloc[i]) and bool(overheat.iloc[i]):
+        is_heat = pd.notna(overheat.iloc[i]) and bool(overheat.iloc[i])
+        is_cold = pd.notna(oversold.iloc[i]) and bool(oversold.iloc[i])
+
+        if is_heat:
             signals.append(
                 {
                     "date": date,
@@ -103,7 +119,15 @@ def compute_atr(
                     "note": f"收盘 {close.iloc[i]:.2f} 突破上轨 {upper.iloc[i]:.2f}（MA{ma_period}+{mult}×ATR{atr.iloc[i]:.2f}），进入极端强势区，警惕见顶",
                 }
             )
-        if pd.notna(oversold.iloc[i]) and bool(oversold.iloc[i]):
+            if heat_run is None:
+                heat_run = {"max_high": float(high.iloc[i]), "max_high_i": i, "prev_close": float(close.iloc[i])}
+            else:
+                if float(high.iloc[i]) > heat_run["max_high"]:
+                    heat_run["max_high"] = float(high.iloc[i])
+                    heat_run["max_high_i"] = i
+                heat_run["prev_close"] = float(close.iloc[i])
+
+        if is_cold:
             signals.append(
                 {
                     "date": date,
@@ -112,27 +136,105 @@ def compute_atr(
                     "note": f"收盘 {close.iloc[i]:.2f} 跌破下轨 {lower.iloc[i]:.2f}（MA{ma_period}-{mult}×ATR{atr.iloc[i]:.2f}），进入极端弱势区，警惕见底",
                 }
             )
-        if pd.notna(top.iloc[i]) and bool(top.iloc[i]):
-            signals.append(
-                {
-                    "date": date,
-                    "kind": "top",
-                    "price": round(float(close.iloc[i]), 4),
-                    "note": f"超涨后回落（收盘 {close.iloc[i]:.2f} < 前收 {close.iloc[i-1]:.2f}），确认潜在顶部",
-                }
-            )
-        if pd.notna(bottom.iloc[i]) and bool(bottom.iloc[i]):
-            signals.append(
-                {
-                    "date": date,
-                    "kind": "bottom",
-                    "price": round(float(close.iloc[i]), 4),
-                    "note": f"超跌后反弹（收盘 {close.iloc[i]:.2f} > 前收 {close.iloc[i-1]:.2f}），确认潜在底部",
-                }
-            )
+            if cold_run is None:
+                cold_run = {"min_low": float(low.iloc[i]), "min_low_i": i, "prev_close": float(close.iloc[i])}
+            else:
+                if float(low.iloc[i]) < cold_run["min_low"]:
+                    cold_run["min_low"] = float(low.iloc[i])
+                    cold_run["min_low_i"] = i
+                cold_run["prev_close"] = float(close.iloc[i])
+
+        # 超涨段结束 → 进入待确认状态（最多顺延 max_confirm_bars 根）
+        if heat_run is not None and not is_heat:
+            heat_pending = {
+                "max_high": heat_run["max_high"],
+                "max_high_i": heat_run["max_high_i"],
+                "last_close": heat_run["prev_close"],
+                "bars": 0,
+            }
+            heat_run = None
+
+        # 顶确认：回落幅度达到阈值（可在段结束后的 max_confirm_bars 根内延迟确认）
+        if heat_pending is not None:
+            # 待确认期间若盘中创出更高价，顶价同步上移（仍用历史数据，无未来函数）
+            if float(high.iloc[i]) > heat_pending["max_high"]:
+                heat_pending["max_high"] = float(high.iloc[i])
+                heat_pending["max_high_i"] = i
+            if float(close.iloc[i]) < heat_pending["last_close"]:
+                drop = heat_pending["last_close"] - float(close.iloc[i])
+                heat_pending["bars"] += 1
+                if drop >= confirm_amp_mult * float(atr.iloc[i]):
+                    if i - last_top_i >= min_same_kind_gap:
+                        extreme = _bar_key(d["datetime"].iloc[heat_pending["max_high_i"]])
+                        signals.append(
+                            {
+                                "date": date,
+                                "kind": "top",
+                                "price": round(heat_pending["max_high"], 4),
+                                "note": (
+                                    f"超涨段最高 {heat_pending['max_high']:.2f}（{extreme}）后回落 "
+                                    f"{drop:.2f}（≥{confirm_amp_mult}×ATR{atr.iloc[i]:.2f}），确认潜在顶部"
+                                ),
+                            }
+                        )
+                        last_top_i = i
+                    heat_pending = None
+                elif heat_pending["bars"] >= max_confirm_bars:
+                    heat_pending = None
+            else:
+                heat_pending = None
+
+        # 超跌段结束 → 进入待确认状态
+        if cold_run is not None and not is_cold:
+            cold_pending = {
+                "min_low": cold_run["min_low"],
+                "min_low_i": cold_run["min_low_i"],
+                "last_close": cold_run["prev_close"],
+                "bars": 0,
+            }
+            cold_run = None
+
+        # 底确认：反弹幅度达到阈值（可延迟确认）
+        if cold_pending is not None:
+            # 待确认期间若盘中创出更低价，底价与基准收盘同步下移（8-03 这类“未超跌但创新低”也能接上）
+            if float(low.iloc[i]) < cold_pending["min_low"]:
+                cold_pending["min_low"] = float(low.iloc[i])
+                cold_pending["min_low_i"] = i
+            if float(close.iloc[i]) > cold_pending["last_close"]:
+                rise = float(close.iloc[i]) - cold_pending["last_close"]
+                cold_pending["bars"] += 1
+                if rise >= confirm_amp_mult * float(atr.iloc[i]):
+                    if i - last_bottom_i >= min_same_kind_gap:
+                        extreme = _bar_key(d["datetime"].iloc[cold_pending["min_low_i"]])
+                        signals.append(
+                            {
+                                "date": date,
+                                "kind": "bottom",
+                                "price": round(cold_pending["min_low"], 4),
+                                "note": (
+                                    f"超跌段最低 {cold_pending['min_low']:.2f}（{extreme}）后反弹 "
+                                    f"{rise:.2f}（≥{confirm_amp_mult}×ATR{atr.iloc[i]:.2f}），确认潜在底部"
+                                ),
+                            }
+                        )
+                        last_bottom_i = i
+                    cold_pending = None
+                elif cold_pending["bars"] >= max_confirm_bars:
+                    cold_pending = None
+            else:
+                # 仍在探底：基准收盘下移并重置计时，等真正反弹
+                cold_pending["last_close"] = float(close.iloc[i])
+                cold_pending["bars"] = 0
 
     return {
-        "config": {"period": period, "mult": mult, "ma_period": ma_period},
+        "config": {
+            "period": period,
+            "mult": mult,
+            "ma_period": ma_period,
+            "confirm_amp_mult": confirm_amp_mult,
+            "min_same_kind_gap": min_same_kind_gap,
+            "max_confirm_bars": max_confirm_bars,
+        },
         "bars": bars,
         "signals": signals,
     }
@@ -144,13 +246,24 @@ def atr_signal_stats(
     mult: float = 2.5,
     ma_period: int = 20,
     horizon: int = 5,
+    confirm_amp_mult: float = 1.0,
+    min_same_kind_gap: int = 5,
+    max_confirm_bars: int = 3,
 ) -> dict:
     """顶/底信号的样本外统计：信号后 horizon 根 K 线的涨跌概率与平均收益。"""
     d = df.copy()
     d["datetime"] = pd.to_datetime(d["datetime"])
     d = d.sort_values("datetime").reset_index(drop=True)
     closes = d["close"].astype(float)
-    res = compute_atr(d, period=period, mult=mult, ma_period=ma_period)
+    res = compute_atr(
+        d,
+        period=period,
+        mult=mult,
+        ma_period=ma_period,
+        confirm_amp_mult=confirm_amp_mult,
+        min_same_kind_gap=min_same_kind_gap,
+        max_confirm_bars=max_confirm_bars,
+    )
     idx_of = {str(row["datetime"]): i for i, row in d.iterrows()}
 
     stats = {"top": {"n": 0, "down": 0, "avg_fwd": 0.0, "hit_rate": 0.0}, "bottom": {"n": 0, "up": 0, "avg_fwd": 0.0, "hit_rate": 0.0}}
