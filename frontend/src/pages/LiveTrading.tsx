@@ -493,7 +493,7 @@ function KLineModal({
     };
   }, [atrOn, code, tab, barCount, atrWindow, excludeLast]);
 
-  // 威科夫阶段（吸筹/拉升/派发/下跌 + 主力成本区）
+  // 通俗信号：积（吸筹）/派（派发）
   useEffect(() => {
     if (!wyckoffOn || tab === "minute") {
       setWyckoffData(null);
@@ -518,7 +518,7 @@ function KLineModal({
     };
   }, [wyckoffOn, code, tab, barCount, excludeLast]);
 
-  // ICT/SMC 结构（FVG/OB/扫荡/结构突破）
+  // 通俗信号：扫（洗盘）/突（突破）/破（破位）/变（结构变化）
   useEffect(() => {
     if (!smcOn || tab === "minute") {
       setSmcData(null);
@@ -842,180 +842,107 @@ function KLineModal({
       atrMarker("top", "#ef4444", "顶", true, "diamond", 0);
       atrMarker("bottom", "#22c55e", "底", false, "diamond", 0);
     }
-    // 威科夫阶段：色带 + 主力成本区 + Spring/Upthrust
-    if (wyckoffOn && wyckoffData && wyckoffData.phases.length > 0) {
+    // 通俗信号标签：积（吸筹）/派（派发）/扫（洗盘扫荡）/突（突破）/破（破位）/变（结构变化）
+    const plainMarker = (
+      label: string,
+      color: string,
+      items: Array<{ value: [number, number]; note?: string; date?: string }>,
+      labelPos: "top" | "bottom" | "inside" = "inside",
+    ) => {
+      if (items.length === 0) return;
+      extraSeries.push({
+        name: label,
+        type: "scatter",
+        data: items,
+        symbol: "circle",
+        symbolSize: 7,
+        itemStyle: { color, borderColor: "#fff", borderWidth: 1 },
+        label: {
+          show: true,
+          position: labelPos,
+          color,
+          fontSize: 11,
+          fontWeight: 800,
+          backgroundColor: "rgba(0,0,0,.55)",
+          padding: [1, 3],
+          borderRadius: 3,
+          formatter: label,
+        },
+        tooltip: {
+          show: true,
+          formatter: (p: unknown) => {
+            const it = p as { data?: { date?: string; note?: string } };
+            return it.data?.date ? `<b>${label}</b>（${it.data.date.slice(0, 16)}）<br/>${it.data.note ?? ""}` : "";
+          },
+        },
+        z: 8,
+      });
+      legendData.push(label);
+    };
+
+    if (wyckoffOn && wyckoffData) {
       const idxOf = new Map(data.map((b, i) => [b.date.slice(0, 16), i]));
-      const phaseColor: Record<string, string> = {
-        accumulation: "rgba(6,182,212,.10)",
-        markup: "rgba(239,68,68,.08)",
-        distribution: "rgba(249,115,22,.10)",
-        markdown: "rgba(34,197,94,.08)",
-      };
-      const areas: Array<Record<string, unknown>> = [];
-      for (const ph of wyckoffData.phases) {
-        const s = idxOf.get(ph.start.slice(0, 16));
-        const e = idxOf.get(ph.end.slice(0, 16));
-        if (s === undefined || e === undefined) continue;
-        const seg = data.slice(s, e + 1);
-        if (seg.length === 0) continue;
-        const ylo = Math.min(...seg.map((b) => b.l));
-        const yhi = Math.max(...seg.map((b) => b.h));
-        areas.push(
-          { xAxis: s, yAxis: ylo },
-          { xAxis: e, yAxis: yhi, itemStyle: { color: phaseColor[ph.phase] ?? "rgba(255,255,255,.05)" } },
-        );
-      }
-      if (areas.length > 0) {
-        // markArea 需要 [{xAxis,yAxis},{xAxis,yAxis}] 成对结构；上面用 end 项带色
-        const pairs: Array<Array<Record<string, unknown>>> = [];
-        for (let i = 0; i + 1 < areas.length; i += 2) {
-          pairs.push([{ xAxis: areas[i].xAxis, yAxis: areas[i].yAxis }, { xAxis: areas[i + 1].xAxis, yAxis: areas[i + 1].yAxis, itemStyle: areas[i + 1].itemStyle }]);
-        }
-        if (pairs.length > 0) {
-          extraSeries.push({
-            name: "威科夫阶段",
-            type: "line",
-            data: [],
-            markArea: { silent: true, data: pairs },
-            z: 0,
-          });
-          legendData.push("威科夫阶段");
-        }
-      }
-      // 主力成本区：黄色虚线（低/高）
-      if (wyckoffData.cost_zone) {
-        const cz = wyckoffData.cost_zone;
-        extraSeries.push({
-          name: "主力成本区",
-          type: "line",
-          data: [],
-          markLine: {
-            symbol: "none",
-            silent: true,
-            lineStyle: { color: "#eab308", type: "dashed", width: 1 },
-            label: { color: "#eab308", fontSize: 10 },
-            data: [
-              { yAxis: cz.low, name: `成本区下沿 ${cz.low.toFixed(2)}` },
-              { yAxis: cz.high, name: `成本区上沿 ${cz.high.toFixed(2)}` },
-            ],
-          },
-          z: 2,
-        });
-        legendData.push("主力成本区");
-      }
-      // Spring / Upthrust
-      const wkMarker = (kind: "spring" | "upthrust", color: string, label: string, isTop: boolean) => {
-        const items = wyckoffData.signals
-          .filter((s) => s.kind === kind)
-          .map((s) => {
-            const i = idxOf.get(s.date.slice(0, 16));
-            if (i === undefined) return null;
-            const bar = data[i];
-            const gap = chartRange * 0.02;
-            return { value: [i, isTop ? bar.h + gap : bar.l - gap], name: label, note: s.note, date: s.date };
-          })
-          .filter((v) => v !== null);
-        if (items.length === 0) return;
-        extraSeries.push({
-          name: label,
-          type: "scatter",
-          data: items,
-          symbol: "arrow",
-          symbolSize: 13,
-          symbolRotate: isTop ? 90 : -90,
-          itemStyle: { color, borderColor: "#fff", borderWidth: 1 },
-          label: {
-            show: true,
-            position: isTop ? "top" : "bottom",
-            color,
-            fontSize: 10,
-            fontWeight: 700,
-            backgroundColor: "rgba(0,0,0,.65)",
-            padding: [1, 3],
-            borderRadius: 3,
-          },
-          tooltip: {
-            show: true,
-            formatter: (p: unknown) => {
-              const it = p as { data?: { date?: string; note?: string } };
-              return it.data?.date ? `<b>${label}</b>（${it.data.date.slice(0, 16)}）<br/>${it.data.note ?? ""}` : "";
-            },
-          },
-          z: 7,
-        });
-        legendData.push(label);
-      };
-      wkMarker("spring", "#22c55e", "吸筹确认", false);
-      wkMarker("upthrust", "#f97316", "派发确认", true);
+      const springItems = wyckoffData.signals
+        .filter((s) => s.kind === "spring")
+        .map((s) => {
+          const i = idxOf.get(s.date.slice(0, 16));
+          if (i === undefined) return null;
+          const bar = data[i];
+          return { value: [i, bar.l - chartRange * 0.025], note: s.note, date: s.date };
+        })
+        .filter((v): v is { value: [number, number]; note: string; date: string } => v !== null);
+      plainMarker("积", "#22c55e", springItems, "bottom");
+      const upthrustItems = wyckoffData.signals
+        .filter((s) => s.kind === "upthrust")
+        .map((s) => {
+          const i = idxOf.get(s.date.slice(0, 16));
+          if (i === undefined) return null;
+          const bar = data[i];
+          return { value: [i, bar.h + chartRange * 0.025], note: s.note, date: s.date };
+        })
+        .filter((v): v is { value: [number, number]; note: string; date: string } => v !== null);
+      plainMarker("派", "#f97316", upthrustItems, "top");
     }
-    // ICT/SMC：FVG 缺口 + OB 订单块 + 流动性扫荡
+
     if (smcOn && smcData) {
       const idxOf = new Map(data.map((b, i) => [b.date.slice(0, 16), i]));
-      const zoneArea = (label: string, color: string, zones: Array<{ date: string; bottom: number; top: number }>, filledDim = false) => {
-        const pairs: Array<Array<Record<string, unknown>>> = [];
-        for (const z of zones) {
-          const i = idxOf.get(z.date.slice(0, 16));
-          if (i === undefined) continue;
-          const itemStyle = filledDim ? { color, opacity: 0.35 } : { color };
-          pairs.push([
-            { xAxis: i - 0.5, yAxis: z.bottom, itemStyle },
-            { xAxis: i + 0.5, yAxis: z.top, itemStyle },
-          ]);
+      const sweepItems = smcData.sweeps
+        .map((s) => {
+          const i = idxOf.get(s.date.slice(0, 16));
+          if (i === undefined) return null;
+          const bar = data[i];
+          return {
+            value: [i, s.kind === "bullish" ? bar.l - chartRange * 0.025 : bar.h + chartRange * 0.025],
+            note: s.note,
+            date: s.date,
+          };
+        })
+        .filter((v): v is { value: [number, number]; note: string; date: string } => v !== null);
+      plainMarker("扫", "#e11d48", sweepItems, "inside");
+      const bos = smcData.structure?.last_bos;
+      if (bos) {
+        const i = idxOf.get(bos.date.slice(0, 16));
+        if (i !== undefined) {
+          const bar = data[i];
+          plainMarker(
+            bos.kind === "bullish" ? "突" : "破",
+            bos.kind === "bullish" ? "#ef4444" : "#22c55e",
+            [{ value: [i, bos.kind === "bullish" ? bar.h + chartRange * 0.025 : bar.l - chartRange * 0.025], note: bos.note, date: bos.date }],
+            bos.kind === "bullish" ? "top" : "bottom",
+          );
         }
-        if (pairs.length === 0) return;
-        extraSeries.push({
-          name: label,
-          type: "line",
-          data: [],
-          markArea: { silent: true, data: pairs },
-          z: 1,
-        });
-        legendData.push(label);
-      };
-      if (smcData.fvg.length > 0) {
-        zoneArea("FVG看涨", "rgba(34,197,94,.13)", smcData.fvg.filter((g) => g.kind === "bullish"));
-        zoneArea("FVG看跌", "rgba(239,68,68,.13)", smcData.fvg.filter((g) => g.kind === "bearish"));
       }
-      if (smcData.ob.length > 0) {
-        zoneArea("OB看涨", "rgba(6,182,212,.16)", smcData.ob.filter((g) => g.kind === "bullish"));
-        zoneArea("OB看跌", "rgba(249,115,22,.16)", smcData.ob.filter((g) => g.kind === "bearish"));
-      }
-      // 流动性扫荡
-      if (smcData.sweeps.length > 0) {
-        const items = smcData.sweeps
-          .map((s) => {
-            const i = idxOf.get(s.date.slice(0, 16));
-            if (i === undefined) return null;
-            const bar = data[i];
-            const gap = chartRange * 0.025;
-            return { value: [i, s.kind === "bullish" ? bar.l - gap : bar.h + gap], name: s.kind === "bullish" ? "扫多" : "扫空", note: s.note, date: s.date };
-          })
-          .filter((v) => v !== null);
-        if (items.length > 0) {
-          extraSeries.push({
-            name: "流动性扫荡",
-            type: "scatter",
-            data: items,
-            symbol: "diamond",
-            symbolSize: 12,
-            itemStyle: { color: "#e11d48", borderColor: "#fff", borderWidth: 1 },
-            label: {
-              show: true,
-              position: "inside",
-              color: "#fff",
-              fontSize: 9,
-              fontWeight: 700,
-            },
-            tooltip: {
-              show: true,
-              formatter: (p: unknown) => {
-                const it = p as { data?: { date?: string; note?: string; name?: string } };
-                return it.data?.date ? `<b>${it.data.name ?? ""}</b>（${it.data.date.slice(0, 16)}）<br/>${it.data.note ?? ""}` : "";
-              },
-            },
-            z: 8,
-          });
-          legendData.push("流动性扫荡");
+      const choch = smcData.structure?.last_choch;
+      if (choch) {
+        const i = idxOf.get(choch.date.slice(0, 16));
+        if (i !== undefined) {
+          const bar = data[i];
+          plainMarker(
+            "变",
+            "#f59e0b",
+            [{ value: [i, bar.h + chartRange * 0.04], note: choch.note, date: choch.date }],
+            "top",
+          );
         }
       }
     }
@@ -1430,9 +1357,9 @@ function KLineModal({
               "ml-1 rounded-md px-2 py-1 text-xs",
               wyckoffOn ? "bg-cyan-500/15 font-medium text-cyan-400" : "bg-muted/40 text-muted-foreground hover:text-foreground",
             )}
-            title="威科夫：吸筹/拉升/派发/下跌阶段 + 主力成本区 + Spring/Upthrust"
+            title="通俗信号：积=低位吸筹（看涨）、派=高位派发（看跌）"
           >
-            威科夫{wyckoffOn ? "开" : "关"}
+            积派{wyckoffOn ? "开" : "关"}
           </button>
           <button
             onClick={() => setSmcOn((v) => !v)}
@@ -1440,9 +1367,9 @@ function KLineModal({
               "ml-1 rounded-md px-2 py-1 text-xs",
               smcOn ? "bg-fuchsia-500/15 font-medium text-fuchsia-400" : "bg-muted/40 text-muted-foreground hover:text-foreground",
             )}
-            title="ICT/SMC：FVG缺口 + 订单块OB + 流动性扫荡 + 结构突破"
+            title="通俗信号：扫=洗盘扫荡、突=向上突破、破=向下破位、变=结构变化"
           >
-            SMC{smcOn ? "开" : "关"}
+            扫突{smcOn ? "开" : "关"}
           </button>
           <select
             value={barCount}
