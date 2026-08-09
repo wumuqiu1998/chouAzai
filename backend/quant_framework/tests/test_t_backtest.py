@@ -70,3 +70,17 @@ def test_band_t_backtest_runs():
         vp_surge_ratio=1.15,
     )
     assert len(res_vp["daily"]) == 20
+
+    # 趋势过滤模式也能正常运行
+    res_trend = run_band_t_backtest(
+        base_price=43.0,
+        base_shares=1000,
+        days=20,
+        category=11,
+        offset=800,
+        df=df,
+        trend_window=1,
+        trend_period=20,
+    )
+    assert len(res_trend["daily"]) == 20
+    assert all(d["trend"] in {"up", "down", "neutral"} for d in res_trend["daily"])

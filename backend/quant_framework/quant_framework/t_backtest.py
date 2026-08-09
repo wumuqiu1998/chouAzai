@@ -202,6 +202,9 @@ def run_band_t_backtest(
     vp_shrink_ratio: float = 0.0,
     vp_surge_ratio: float = 0.0,
     vol_window: int = 20,
+    trend_window: int = 0,
+    trend_period: int = 20,
+    daily_df: pd.DataFrame | None = None,
     df: pd.DataFrame | None = None,
 ) -> dict:
     """中枢上下轨做T：ZD（下沿）低吸 / ZG（上沿）高抛。
@@ -237,6 +240,24 @@ def run_band_t_backtest(
     vols = df["volume"].values
     avg_vol = df["volume"].rolling(vol_window, min_periods=vol_window).mean().values
     last_idx_by_day = df.groupby(df["datetime"].dt.date).apply(lambda g: g.index[-1]).to_dict()
+
+    # 大级别方向：日线收盘 vs MA(trend_period)，用前一日收盘判定当日方向（无未来函数）
+    direction: dict = {}
+    if trend_window > 0:
+        if daily_df is not None:
+            ddf = daily_df.copy()
+            ddf["datetime"] = pd.to_datetime(ddf["datetime"])
+            dclose = ddf.groupby(ddf["datetime"].dt.date)["close"].last()
+        else:
+            dclose = df.groupby(df["datetime"].dt.date)["close"].last()
+        dma = dclose.rolling(trend_period, min_periods=trend_period).mean()
+        prev_close = dclose.shift(1)
+        prev_ma = dma.shift(1)
+        for day in backtest_dates:
+            if day in prev_close.index and pd.notna(prev_close[day]) and pd.notna(prev_ma[day]):
+                direction[day] = "up" if prev_close[day] > prev_ma[day] else "down"
+            else:
+                direction[day] = "neutral"
 
     # 1) 逐 bar 因果扫描：确认中枢与背驰点，生成上下轨触发
     triggers: list[dict] = []
@@ -296,7 +317,7 @@ def run_band_t_backtest(
                     fees_total += fee
                     gross = (lg["price"] - px) * trade_size
                     trades_log.append({"date": day, "side": "buy", "kind": "close_short", "price": round(px, 3), "shares": trade_size, "paired_pnl": round(gross, 2)})
-                elif not any(lg["dir"] == "long" for lg in legs):
+                elif not any(lg["dir"] == "long" for lg in legs) and direction.get(day, "neutral") != "down":
                     # 开多（先买后卖场景）：背驰过滤
                     if use_beichi_filter and (last_buy_pos is None or i - last_buy_pos > beichi_window):
                         continue
@@ -319,7 +340,7 @@ def run_band_t_backtest(
                     fees_total += fee
                     gross = (px - lg["price"]) * trade_size
                     trades_log.append({"date": day, "side": "sell", "kind": "close_long", "price": round(px, 3), "shares": trade_size, "paired_pnl": round(gross, 2)})
-                elif not any(lg["dir"] == "short" for lg in legs):
+                elif not any(lg["dir"] == "short" for lg in legs) and direction.get(day, "neutral") != "up":
                     if use_beichi_filter and (last_sell_pos is None or i - last_sell_pos > beichi_window):
                         continue
                     px = exec_price * (1 - slippage)
@@ -357,6 +378,7 @@ def run_band_t_backtest(
                 "date": str(day),
                 "t_pnl": round(t_cash - day_start, 2),
                 "triggers": len(day_triggers),
+                "trend": direction.get(day, "neutral"),
             }
         )
 
@@ -377,6 +399,8 @@ def run_band_t_backtest(
             "vp_shrink_ratio": vp_shrink_ratio,
             "vp_surge_ratio": vp_surge_ratio,
             "vol_window": vol_window,
+            "trend_window": trend_window,
+            "trend_period": trend_period,
         },
         "period": {"start": str(backtest_dates[0]), "end": str(backtest_dates[-1]), "last_close": last_close},
         "daily": daily,
