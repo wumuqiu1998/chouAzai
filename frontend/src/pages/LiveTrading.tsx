@@ -1099,8 +1099,10 @@ function KLineModal({
       : label === "突" ? "#ef4444"
       : label === "破" ? "#22c55e"
       : label === "变" ? "#f59e0b"
-      : label === "顶" || label.startsWith("S") || label === "警" ? "#3b82f6"
-      : "#ef4444"; // 底 / B1/B2/B3 等看涨
+      : label === "顶" ? "#ef4444"
+      : label === "底" ? "#22c55e"
+      : label.startsWith("S") || label === "警" ? "#3b82f6"
+      : "#ef4444"; // B1/B2/B3 等看涨
     const last = pts[pts.length - 1].price;
     const lineColor = last >= minute.prev_close ? "#ef4444" : "#22c55e";
     const chg = minute.prev_close ? ((last - minute.prev_close) / minute.prev_close) * 100 : null;
@@ -1316,7 +1318,10 @@ function KLineModal({
                   .filter((v): v is { value: [number, number]; color: string; label: string; time: string; note: string } => v !== null),
                 symbol: "circle",
                 symbolSize: 6,
-                itemStyle: { color: "#a8a29e", opacity: 0.65 },
+                itemStyle: {
+                  color: (p: unknown) => (p as { data?: { color?: string } }).data?.color ?? "#a8a29e",
+                  opacity: 0.8,
+                },
                 label: {
                   show: true,
                   position: "inside",
