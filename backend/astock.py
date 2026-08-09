@@ -909,6 +909,150 @@ def concept_blocks(code: str) -> dict:
     return {"total": len(boards), "boards": boards, "concept_tags": [b["name"] for b in boards]}
 
 
+_BLOCK_KLINE_CACHE: dict = {}
+
+
+def _block_kline_em(bk_code: str, days: int) -> list[dict]:
+    """东财板块指数日K（push2his 多镜像 + 短重试）。返回 date/open/high/low/close/volume 列表。"""
+    import requests
+
+    hosts = [
+        "push2his.eastmoney.com",
+        "1.push2his.eastmoney.com",
+        "2.push2his.eastmoney.com",
+        "3.push2his.eastmoney.com",
+        "push2his2.eastmoney.com",
+    ]
+    params = {
+        "secid": f"90.{bk_code}",
+        "klt": "101",
+        "fqt": "1",
+        "lmt": str(days),
+        "end": "20500101",
+        "fields1": "f1,f2,f3,f4,f5,f6",
+        "fields2": "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61",
+    }
+    headers = {"User-Agent": UA, "Referer": "https://quote.eastmoney.com/"}
+    for attempt in range(2):
+        for host in hosts:
+            try:
+                s = requests.Session()
+                s.headers.update(headers)
+                s.trust_env = False
+                r = s.get(f"https://{host}/api/qt/stock/kline/get", params=params, timeout=8)
+                if r.headers.get("Content-Type", "").startswith("application/json"):
+                    d = r.json()
+                    rows = (d.get("data") or {}).get("klines") or []
+                    if rows:
+                        return _parse_em_klines(rows)
+            except Exception:
+                continue
+        if attempt == 0:
+            time.sleep(1.0)
+    return []
+
+
+def _parse_em_klines(rows: list[str]) -> list[dict]:
+    out: list[dict] = []
+    for line in rows:
+        p = str(line).split(",")
+        if len(p) < 6:
+            continue
+        try:
+            out.append({
+                "datetime": p[0],
+                "open": float(p[1]),
+                "close": float(p[2]),
+                "high": float(p[3]),
+                "low": float(p[4]),
+                "volume": float(p[5]),
+                "amount": float(p[6]) if len(p) > 6 else 0.0,
+            })
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def _block_kline_baidu(bk_code: str, days: int) -> list[dict]:
+    """百度股市通板块日K备源（板块代码小写：BK1036 -> bk1036）。"""
+    import json
+
+    import requests
+
+    code = bk_code.lower()
+    try:
+        r = requests.get(
+            "https://finance.pae.baidu.com/vapi/v1/getquotation",
+            params={
+                "srcid": "5353",
+                "pointType": "string",
+                "group": "quotation_kline_ab",
+                "query": code,
+                "code": code,
+                "ktype": "day",
+                "isIndex": "true",
+                "finClientType": "pc",
+            },
+            timeout=10,
+            headers={"User-Agent": UA},
+        )
+        d = r.json()
+    except Exception:
+        return []
+    if str(d.get("ResultCode", -1)) != "0":
+        return []
+    market = d.get("Result", {}).get("newMarketData") or {}
+    md = market.get("marketData")
+    raw: list | dict | None = None
+    if isinstance(md, str):
+        try:
+            raw = json.loads(md)
+        except Exception:
+            raw = None
+    else:
+        raw = md
+    if isinstance(raw, dict):
+        for k in ("marketData", "kline", "KLineData", "data"):
+            if isinstance(raw.get(k), list):
+                raw = raw[k]
+                break
+    if not isinstance(raw, list):
+        return []
+    out: list[dict] = []
+    for row in raw[-days:]:
+        if not isinstance(row, dict):
+            continue
+        try:
+            out.append({
+                "datetime": str(row.get("date") or row.get("time") or row.get("dateStr") or "")[:10],
+                "open": float(row.get("open", 0)),
+                "high": float(row.get("high", 0)),
+                "low": float(row.get("low", 0)),
+                "close": float(row.get("close", 0)),
+                "volume": float(row.get("volume", 0) or 0),
+                "amount": float(row.get("amount", 0) or 0),
+            })
+        except (TypeError, ValueError):
+            continue
+    return [r for r in out if r["datetime"] and r["close"] > 0]
+
+
+def block_kline(bk_code: str, days: int = 260) -> list[dict]:
+    """板块/概念指数日K（东财 push2his 主源，百度备源），带进程内缓存。
+
+    返回 date/open/high/low/close/volume 列表；全部失败返回空列表。
+    """
+    key = (bk_code, days)
+    hit = _BLOCK_KLINE_CACHE.get(key)
+    if hit is not None:
+        return hit
+    rows = _block_kline_em(bk_code, days)
+    if not rows:
+        rows = _block_kline_baidu(bk_code, days)
+    _BLOCK_KLINE_CACHE[key] = rows
+    return rows
+
+
 def hot_concepts(code: str) -> list[dict]:
     """个股当下被市场归到哪些概念在炒（东财热门概念命中，按热度降序）。"""
     import requests

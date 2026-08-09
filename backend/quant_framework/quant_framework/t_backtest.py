@@ -30,6 +30,7 @@ def run_t_backtest(
     slippage: float = 0.0001,
     lot: int = 100,
     min_warmup: int = 60,
+    regime: dict | None = None,
     df: pd.DataFrame | None = None,
 ) -> dict:
     if df is None:
@@ -82,13 +83,46 @@ def run_t_backtest(
     for day in backtest_dates:
         day_start = t_cash
         pending_sells: list[dict] = []
+        pending_buys: list[dict] = []
         sell_count = 0
         buy_count = 0
+        state = (regime or {}).get(day, "range")
         day_signals = [s for s in signals if s["day"] == day]
         for s in day_signals:
             i = s["exec_i"]
             exec_price = float(opens[i])
-            if s["kind"].startswith("sell") and available >= trade_size:
+            if state == "up":
+                # 板块上升：顺趋势做多T（B点买入 → S点卖出；当日新买部分当日平，简化口径同中枢long腿）
+                if not s["kind"].startswith("sell") and t_cash >= exec_price * trade_size * (1 + slippage):
+                    px = exec_price * (1 + slippage)
+                    amount = px * trade_size
+                    fee = amount * commission
+                    t_cash -= amount + fee
+                    fees_total += fee
+                    pending_buys.append({"price": px, "shares": trade_size})
+                    buy_count += 1
+                    trades_log.append({"date": day, "side": "buy", "kind": s["kind"], "price": round(px, 3), "shares": trade_size})
+                elif s["kind"].startswith("sell") and pending_buys:
+                    px = exec_price * (1 - slippage)
+                    amount = px * trade_size
+                    fee = amount * (commission + stamp_duty)
+                    t_cash += amount - fee
+                    fees_total += fee
+                    pb = pending_buys.pop(0)
+                    gross = (px - pb["price"]) * trade_size
+                    sell_count += 1
+                    trades_log.append(
+                        {
+                            "date": day,
+                            "side": "sell",
+                            "kind": s["kind"],
+                            "price": round(px, 3),
+                            "shares": trade_size,
+                            "paired_pnl": round(gross, 2),
+                        }
+                    )
+            elif s["kind"].startswith("sell") and available >= trade_size:
+                # 板块下跌/震荡：原做空T（S点卖底仓 → B点买回）
                 px = exec_price * (1 - slippage)
                 amount = px * trade_size
                 fee = amount * (commission + stamp_duty)
@@ -119,7 +153,7 @@ def run_t_backtest(
                     }
                 )
 
-        # 收盘强制买回剩余，保持底仓
+        # 收盘强制回补，保持底仓（up 状态强制平掉当日新买部分）
         if pending_sells:
             last_idx = last_idx_by_day[day]
             px = float(closes[last_idx]) * (1 + slippage)
@@ -141,6 +175,26 @@ def run_t_backtest(
                         "paired_pnl": round(gross, 2),
                     }
                 )
+        elif pending_buys:
+            last_idx = last_idx_by_day[day]
+            px = float(closes[last_idx]) * (1 - slippage)
+            rem = sum(p["shares"] for p in pending_buys)
+            amount = px * rem
+            fee = amount * (commission + stamp_duty)
+            t_cash += amount - fee
+            fees_total += fee
+            for pb in pending_buys:
+                gross = (px - pb["price"]) * pb["shares"]
+                trades_log.append(
+                    {
+                        "date": day,
+                        "side": "force_sell",
+                        "kind": "restore",
+                        "price": round(px, 3),
+                        "shares": pb["shares"],
+                        "paired_pnl": round(gross, 2),
+                    }
+                )
 
         daily.append(
             {
@@ -149,6 +203,7 @@ def run_t_backtest(
                 "sells": sell_count,
                 "buys": buy_count,
                 "signals": len(day_signals),
+                "regime": state,
             }
         )
 
@@ -167,6 +222,7 @@ def run_t_backtest(
             "commission": commission,
             "stamp_duty": stamp_duty,
             "slippage": slippage,
+            "regime": "up/down/range 状态切换" if regime else "无状态切换",
         },
         "period": {"start": str(backtest_dates[0]), "end": str(backtest_dates[-1]), "last_close": last_close},
         "daily": daily,
@@ -205,6 +261,7 @@ def run_band_t_backtest(
     trend_window: int = 0,
     trend_period: int = 20,
     daily_df: pd.DataFrame | None = None,
+    regime: dict | None = None,
     df: pd.DataFrame | None = None,
 ) -> dict:
     """中枢上下轨做T：ZD（下沿）低吸 / ZG（上沿）高抛。
@@ -258,6 +315,12 @@ def run_band_t_backtest(
                 direction[day] = "up" if prev_close[day] > prev_ma[day] else "down"
             else:
                 direction[day] = "neutral"
+
+    # 板块/概念状态优先：up→禁空、down→禁多、range→双向
+    if regime:
+        for day in backtest_dates:
+            r = regime.get(day, "neutral")
+            direction[day] = "up" if r == "up" else ("down" if r == "down" else "neutral")
 
     # 1) 逐 bar 因果扫描：确认中枢与背驰点，生成上下轨触发
     triggers: list[dict] = []
@@ -379,6 +442,7 @@ def run_band_t_backtest(
                 "t_pnl": round(t_cash - day_start, 2),
                 "triggers": len(day_triggers),
                 "trend": direction.get(day, "neutral"),
+                "regime": (regime or {}).get(day, "neutral"),
             }
         )
 
@@ -401,6 +465,7 @@ def run_band_t_backtest(
             "vol_window": vol_window,
             "trend_window": trend_window,
             "trend_period": trend_period,
+            "regime": "板块状态切换" if regime else "无状态切换",
         },
         "period": {"start": str(backtest_dates[0]), "end": str(backtest_dates[-1]), "last_close": last_close},
         "daily": daily,

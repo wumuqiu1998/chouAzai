@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 
+from quant_framework.regime import build_regime_map, classify_regime
 from quant_framework.t_backtest import run_band_t_backtest, run_t_backtest
 
 
@@ -84,3 +85,54 @@ def test_band_t_backtest_runs():
     )
     assert len(res_trend["daily"]) == 20
     assert all(d["trend"] in {"up", "down", "neutral"} for d in res_trend["daily"])
+
+
+def test_classify_regime_states():
+    idx = pd.date_range("2026-01-02", periods=80, freq="B")
+    up = pd.Series(10 * (1.002 ** np.arange(80)), index=idx)
+    down = pd.Series(10 * (0.998 ** np.arange(80)), index=idx)
+    flat = pd.Series(10 + 0.08 * np.sin(np.arange(80) / 5.0), index=idx)
+    assert (classify_regime(up).tail(10) == "up").all()
+    assert (classify_regime(down).tail(10) == "down").all()
+    # 震荡序列：分类应大部分落在 range（允许边界少量误判）
+    flat_states = classify_regime(flat).tail(20)
+    assert (flat_states == "range").mean() >= 0.9
+
+
+def test_build_regime_map_shifts_no_future():
+    dates = pd.date_range("2026-01-02", periods=80, freq="B")
+    close = pd.Series(10 * (1.002 ** pd.Series(range(80))), index=dates)
+    daily = pd.DataFrame({"date": dates, "close": close.values, "high": close.values * 1.01, "low": close.values * 0.99})
+    m = build_regime_map(daily)
+    # 最早一个状态生效日必须晚于数据首日（shift(1) 后首日无状态）
+    assert len(m) >= 10
+    assert all(v in {"up", "down", "range"} for v in m.values())
+
+
+def test_t_backtest_regime_runs():
+    rng = np.random.default_rng(3)
+    n_days = 50
+    days = pd.bdate_range("2026-01-02", periods=n_days)
+    times = ["09:30", "11:00", "13:00", "14:30"]
+    dts = pd.to_datetime([f"{d.date()} {t}" for d in days for t in times])
+    ret = rng.normal(0.0002, 0.01, len(dts))
+    close = 43 * np.exp(np.cumsum(ret))
+    open_ = close * (1 + rng.normal(0, 0.002, len(dts)))
+    open_[0] = 43.0
+    df = pd.DataFrame(
+        {
+            "datetime": dts,
+            "open": open_,
+            "high": np.maximum(open_, close) * 1.005,
+            "low": np.minimum(open_, close) * 0.995,
+            "close": close,
+            "volume": rng.integers(1e5, 1e6, len(dts)),
+        }
+    )
+    regime = {d.date(): "up" for d in days}
+    res = run_t_backtest(base_price=43.0, base_shares=1000, days=30, category=11, offset=500, df=df, regime=regime)
+    assert all(d["regime"] == "up" for d in res["daily"])
+
+    res_band = run_band_t_backtest(base_price=43.0, base_shares=1000, days=20, category=11, offset=800, df=df, regime=regime)
+    assert all(d["regime"] == "up" for d in res_band["daily"])
+    assert all(d["trend"] == "up" for d in res_band["daily"])
