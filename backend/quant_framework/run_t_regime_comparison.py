@@ -83,8 +83,8 @@ def main() -> None:
         daily_agg = ddf.groupby(ddf["datetime"].dt.date).agg(
             close=("close", "last"), high=("high", "max"), low=("low", "min")
         )
-        # 状态分布（回测窗口内，用 T+1 生效后的有效状态）
-        lines.append(f"状态分布：{fmt_split({s: {'days': sum(1 for d in regime_map.values() if d == s), 'pnl': 0.0} for s in ('up', 'down', 'range')})}")
+        # 状态分布（趋势源全历史，T+1 生效）
+        lines.append(f"状态分布（全历史）：{fmt_split({s: {'days': sum(1 for d in regime_map.values() if d == s), 'pnl': 0.0} for s in ('up', 'down', 'range')})}")
         lines.append("")
         for name, cat, max_days in PLAN:
             try:

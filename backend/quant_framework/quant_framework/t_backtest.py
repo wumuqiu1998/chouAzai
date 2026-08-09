@@ -93,7 +93,7 @@ def run_t_backtest(
             exec_price = float(opens[i])
             if state == "up":
                 # 板块上升：顺趋势做多T（B点买入 → S点卖出；当日新买部分当日平，简化口径同中枢long腿）
-                if not s["kind"].startswith("sell") and t_cash >= exec_price * trade_size * (1 + slippage):
+                if not s["kind"].startswith("sell"):
                     px = exec_price * (1 + slippage)
                     amount = px * trade_size
                     fee = amount * commission

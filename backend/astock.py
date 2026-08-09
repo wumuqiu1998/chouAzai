@@ -1053,6 +1053,109 @@ def block_kline(bk_code: str, days: int = 260) -> list[dict]:
     return rows
 
 
+# ---------------------------------------------------------------------------
+# 同花顺板块指数日K（东财 push2his 被风控时的备源，q.10jqka.com.cn 零鉴权）
+# ---------------------------------------------------------------------------
+
+_THS_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
+    "Referer": "http://q.10jqka.com.cn/",
+}
+_THS_BLOCK_CACHE: dict = {}
+_THS_NAME_MAP_CACHE: dict[str, dict[str, str]] = {}
+
+
+def _ths_jsonp_payload(text: str) -> dict:
+    import json
+
+    import re as _re
+
+    m = _re.search(r"\((.*)\)\s*$", text, _re.S)
+    if not m:
+        return {}
+    try:
+        return json.loads(m.group(1))
+    except Exception:
+        return {}
+
+
+def ths_block_kline(ths_code: str, days: int = 320) -> list[dict]:
+    """同花顺板块指数日K（v4 line 接口），返回 date/open/high/low/close/volume 列表。"""
+    import re
+
+    import requests
+
+    key = (ths_code, days)
+    hit = _THS_BLOCK_CACHE.get(key)
+    if hit is not None:
+        return hit
+    url = f"http://d.10jqka.com.cn/v4/line/bk_{ths_code}/01/last.js"
+    rows: list[dict] = []
+    try:
+        r = requests.get(url, timeout=10, headers=_THS_HEADERS)
+        d = _ths_jsonp_payload(r.text)
+        data = d.get("data") or ""
+        if isinstance(data, str) and data:
+            for line in data.split(";"):
+                p = line.split(",")
+                if len(p) < 6 or not p[0] or not p[1]:
+                    continue
+                try:
+                    rows.append({
+                        "datetime": p[0],
+                        "open": float(p[1]),
+                        "high": float(p[2]),
+                        "low": float(p[3]),
+                        "close": float(p[4]),
+                        "volume": float(p[5]),
+                        "amount": float(p[6]) if len(p) > 6 and p[6] else 0.0,
+                    })
+                except (TypeError, ValueError):
+                    continue
+    except Exception:
+        rows = []
+    rows = rows[-days:]
+    _THS_BLOCK_CACHE[key] = rows
+    return rows
+
+
+def _ths_name_map(kind: str) -> dict[str, str]:
+    """同花顺板块名称→代码映射（kind: thshy=行业 / gn=概念），模块级缓存。"""
+    import re
+
+    import requests
+
+    if kind in _THS_NAME_MAP_CACHE:
+        return _THS_NAME_MAP_CACHE[kind]
+    url = f"http://q.10jqka.com.cn/{kind}/"
+    mapping: dict[str, str] = {}
+    try:
+        r = requests.get(url, timeout=12, headers=_THS_HEADERS)
+        for code, name in re.findall(r'<a[^>]+href="[^"]*/code/(\d{6})/"[^>]*>([^<]+)</a>', r.text):
+            mapping[name.strip()] = code
+    except Exception:
+        mapping = {}
+    _THS_NAME_MAP_CACHE[kind] = mapping
+    return mapping
+
+
+def ths_block_code_by_name(name: str) -> str | None:
+    """板块名 → 同花顺板块代码（先行业后概念）。"""
+    name = str(name or "").strip()
+    if not name:
+        return None
+    for kind in ("thshy", "gn"):
+        code = _ths_name_map(kind).get(name)
+        if code:
+            return code
+    # 模糊匹配：包含关系（如东财「通信设备」→同花顺「通信设备」）
+    for kind in ("thshy", "gn"):
+        for k, v in _ths_name_map(kind).items():
+            if name in k or k in name:
+                return v
+    return None
+
+
 def hot_concepts(code: str) -> list[dict]:
     """个股当下被市场归到哪些概念在炒（东财热门概念命中，按热度降序）。"""
     import requests

@@ -146,22 +146,46 @@ def resolve_regime_source(
     import astock
 
     boards = (concept or {}).get("boards") or []
-    bk_code: str | None = None
-    block_name: str | None = None
-    if boards:
-        main = pick_main_block(boards)
-        if main and main.get("code"):
-            bk_code = str(main["code"]).upper()
-            block_name = str(main.get("name", ""))
-    if bk_code is None and etf_block:
-        block_name = etf_block
-        bk_code = _find_block_code_by_name(etf_block)
-    if bk_code:
-        rows = astock.block_kline(bk_code, days=320)
+    etf_map = {"516080": ("化学制药", "881140")}
+
+    # 0) ETF 手动映射：创新药ETF → 化学制药行业指数
+    if code in etf_map:
+        rows = astock.ths_block_kline(etf_map[code][1], days=320)
         if rows:
-            return "block", block_name, rows
+            return "block", f"{etf_map[code][0]}（同花顺{etf_map[code][1]}）", rows
+
+    # 候选板块名：东财归属前几个（排除地域/风格）+ ETF 名称
+    candidates: list[str] = []
+    main = pick_main_block(boards)
+    if main:
+        candidates.append(str(main.get("name", "")))
+    for b in boards[1:5]:
+        candidates.append(str(b.get("name", "")))
+    if etf_block:
+        candidates.append(etf_block)
+    seen: set[str] = set()
+    for name in candidates:
+        name = name.strip()
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        # 1) 东财板块K线（东财 BK 代码）
+        bk_code = next(
+            (str(b["code"]).upper() for b in boards if str(b.get("name", "")) == name and b.get("code")),
+            None,
+        )
+        if bk_code:
+            rows = astock.block_kline(bk_code, days=320)
+            if rows:
+                return "block", f"{name}（东财{bk_code}）", rows
+        # 2) 同花顺板块指数（按名称匹配）
+        ths_code = astock.ths_block_code_by_name(name)
+        if ths_code:
+            rows = astock.ths_block_kline(ths_code, days=320)
+            if rows:
+                return "block", f"{name}（同花顺{ths_code}）", rows
     rows = astock.kline(code, category=4, offset=320)
-    return "self", block_name, rows
+    return "self", None, rows
 
 
 _BLOCK_NAME_CACHE: dict[str, str] = {}
