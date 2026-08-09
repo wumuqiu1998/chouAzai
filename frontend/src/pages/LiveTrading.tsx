@@ -116,6 +116,17 @@ interface MarketRegime {
   }>;
 }
 
+interface ResonanceData {
+  score: number;
+  rating: string;
+  note: string;
+  weights: { market: number; wyckoff: number; smc: number };
+  market: { score: number; state: string; label: string };
+  wyckoff: { score: number; phase: string; phase_label: string; signals: string[] };
+  smc: { score: number; structure: string; notes: string[] };
+  notes: string[];
+}
+
 const color = (v: number | undefined | null) =>
   v == null ? "text-muted-foreground" : v > 0 ? "text-danger" : v < 0 ? "text-success" : "text-muted-foreground";
 const pct = (v: number | undefined | null) => (v == null ? "—" : `${v > 0 ? "+" : ""}${v.toFixed(2)}%`);
@@ -213,6 +224,15 @@ async function fetchMarketRegime(): Promise<MarketRegime> {
   return (await resp.json()) as MarketRegime;
 }
 
+async function fetchResonance(code: string, category: number, offset: number, excludeLast = false): Promise<ResonanceData> {
+  const resp = await fetch(
+    `/api/quant/smc/resonance?code=${code}&category=${category}&offset=${offset}&exclude_last=${excludeLast ? 1 : 0}`,
+    { headers: authHeaders() },
+  );
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  return (await resp.json()) as ResonanceData;
+}
+
 function IndexCard({ name, price, change_pct }: IndexQuote) {
   return (
     <div className="glass p-3">
@@ -299,6 +319,7 @@ function KLineModal({
   const atrCacheRef = useRef<Record<string, AtrData>>({});
   const wyckoffCacheRef = useRef<Record<string, WyckoffData>>({});
   const smcCacheRef = useRef<Record<string, SmcData>>({});
+  const resonanceCacheRef = useRef<Record<string, ResonanceData>>({});
   const [chanOn, setChanOn] = useState(true);
   const [chanData, setChanData] = useState<ChanData | null>(null);
   const [atrOn, setAtrOn] = useState(true);
@@ -307,6 +328,7 @@ function KLineModal({
   const [wyckoffData, setWyckoffData] = useState<WyckoffData | null>(null);
   const [smcOn, setSmcOn] = useState(true);
   const [smcData, setSmcData] = useState<SmcData | null>(null);
+  const [resonance, setResonance] = useState<ResonanceData | null>(null);
   // 盘中实时：最后一根 K 线未收盘，指标只使用已收盘数据（排除末根）
   const excludeLast = tab !== "minute" && isTradingHours();
   const [barCount, setBarCount] = useState(250);
@@ -487,6 +509,31 @@ function KLineModal({
       cancelled = true;
     };
   }, [smcOn, code, tab, barCount, excludeLast]);
+
+  // 三信号共振评分（市场+威科夫+ICT/SMC）
+  useEffect(() => {
+    if (tab === "minute") {
+      setResonance(null);
+      return;
+    }
+    let cancelled = false;
+    const key = `${code}-${tab}-${barCount}-${excludeLast ? "u" : "c"}`;
+    const cached = (resonanceCacheRef.current as Record<string, ResonanceData>)[key];
+    if (cached) {
+      setResonance(cached);
+      return;
+    }
+    fetchResonance(code, Number(tab), barCount, excludeLast)
+      .then((d) => {
+        if (cancelled) return;
+        resonanceCacheRef.current[key] = d;
+        setResonance(d);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [code, tab, barCount, excludeLast]);
 
   // 盘中自动刷新：交易时段每 15 秒重拉当前周期数据，涨幅/图表实时更新
   useEffect(() => {
@@ -1317,6 +1364,33 @@ function KLineModal({
           {statItem("昨收", statPrev ?? "—")}
           {statItem("量", statVol == null ? "—" : fmt(statVol))}
         </div>
+        {resonance && (
+          <div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs">
+            <span
+              className={cn(
+                "rounded-md px-2 py-0.5 font-bold",
+                resonance.score >= 30
+                  ? "bg-danger/15 text-danger"
+                  : resonance.score <= -30
+                    ? "bg-success/15 text-success"
+                    : "bg-muted/40 text-muted-foreground",
+              )}
+              title={`${resonance.note ?? ""}\n${resonance.notes.join("\n")}`}
+            >
+              共振 {resonance.score > 0 ? "+" : ""}
+              {resonance.score} {resonance.rating}
+            </span>
+            <span className="text-muted-foreground" title={`市场权重 ${Math.round(resonance.weights.market * 100)}% · 得分 ${resonance.market.score}`}>
+              市场 {resonance.market.label}
+            </span>
+            <span className="text-muted-foreground" title={`威科夫权重 ${Math.round(resonance.weights.wyckoff * 100)}% · 得分 ${resonance.wyckoff.score}\n${resonance.wyckoff.signals.join("\n")}`}>
+              威科夫 {resonance.wyckoff.phase_label}
+            </span>
+            <span className="text-muted-foreground" title={`SMC 权重 ${Math.round(resonance.weights.smc * 100)}% · 得分 ${resonance.smc.score}\n${resonance.smc.notes.join("\n")}`}>
+              SMC {resonance.smc.structure === "bullish" ? "多" : resonance.smc.structure === "bearish" ? "空" : "震荡"}
+            </span>
+          </div>
+        )}
         {chanOn && chanData && chanData.points.length > 0 && (
           <div className="mb-2 flex max-h-16 flex-wrap gap-1.5 overflow-auto">
             {chanData.points.map((p) => {

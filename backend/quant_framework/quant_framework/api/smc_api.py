@@ -78,3 +78,19 @@ def smc_analyze(
         return analyze_smc(df)
     except Exception as e:  # noqa: BLE001
         raise HTTPException(status_code=502, detail=f"ICT/SMC 分析失败：{e}")
+
+
+@router.get("/resonance")
+def resonance(
+    code: str = Query(...),
+    category: int = Query(4),
+    offset: int = Query(250, ge=60, le=800),
+    exclude_last: bool = Query(False),
+):
+    """三信号共振评分：市场趋势30% + 威科夫40% + ICT/SMC 30%。"""
+    from quant_framework.resonance import score_resonance
+
+    try:
+        return score_resonance(code, category=category, offset=offset, exclude_last=exclude_last)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"共振评分失败：{e}")
