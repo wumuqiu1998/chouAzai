@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { Plus, X, RefreshCw, Star } from "lucide-react";
+import { KLineModal } from "@/pages/LiveTrading";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { Disclaimer } from "@/components/ui/Disclaimer";
@@ -36,6 +37,7 @@ export function Watchlist() {
   const [codes, setCodes] = useState<string[]>(loadWatch);
   const [input, setInput] = useState("");
   const [hint, setHint] = useState<string | null>(null);
+  const [sel, setSel] = useState<{ code: string; name: string } | null>(null);
   // 实时行情默认**关闭**——开着会持续请求，让用户自己决定要不要开。
   const [live, setLive] = useState(loadLive);
 
@@ -199,8 +201,24 @@ export function Watchlist() {
                   const q = quotes[c];
                   return (
                     <tr key={c} className="border-b border-border/30">
-                      <td className="px-2 py-2.5 font-medium">{q?.name || "—"}</td>
-                      <td className="px-2 py-2.5 font-mono text-xs text-muted-foreground">{c}</td>
+                      <td className="px-2 py-2.5 font-medium">
+                        <button
+                          onClick={() => setSel({ code: c, name: q?.name || c })}
+                          className="hover:text-primary hover:underline"
+                          title="点击看分时/K线（含缠论/ATR/顶底）"
+                        >
+                          {q?.name || "—"}
+                        </button>
+                      </td>
+                      <td className="px-2 py-2.5 font-mono text-xs text-muted-foreground">
+                        <button
+                          onClick={() => setSel({ code: c, name: q?.name || c })}
+                          className="hover:text-primary hover:underline"
+                          title="点击看分时/K线"
+                        >
+                          {c}
+                        </button>
+                      </td>
                       <td className={cn("px-2 py-2.5 font-mono", color(q?.change_pct))}>{q ? q.price : "—"}</td>
                       <td className={cn("px-2 py-2.5 font-mono", color(q?.change_pct))}>{q ? pct(q.change_pct) : "—"}</td>
                       <td className="px-2 py-2.5 font-mono text-muted-foreground">{q?.pe_ttm ?? "—"}</td>
@@ -223,6 +241,16 @@ export function Watchlist() {
           </div>
         )}
       </GlassCard>
+
+      {sel && (
+        <KLineModal
+          key={`${sel.code}-${sel.name}`}
+          code={sel.code}
+          name={sel.name}
+          quote={quotes[sel.code]}
+          onClose={() => setSel(null)}
+        />
+      )}
 
       <Disclaimer />
     </div>

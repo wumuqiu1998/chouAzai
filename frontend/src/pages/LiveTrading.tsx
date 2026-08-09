@@ -1081,6 +1081,8 @@ function KLineModal({
   );
 }
 
+export { KLineModal };
+
 // 涨跌停判断：优先用行情接口的涨跌停价，缺失时回退到涨跌幅阈值
 function limitState(q: Quote | undefined): "up" | "down" | null {
   if (!q) return null;
