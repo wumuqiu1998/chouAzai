@@ -2,7 +2,7 @@
 
 口径：
 - 股票池：东财沪深A全市场随机抽样 50 只（排除科创板 688/689、北交所 8/4、ST、退市），seed 固定可复现；
-- 数据：腾讯日K（约 800 根 ≈ 3.3 年，qfq；接口上限所致，非 5 年，报告中注明）；
+- 数据：腾讯日K（最大 260 根 ≈ 1 年，qfq；按用户要求控制回测时长）；
 - 信号：ATR 顶/底、缠论 B/S/三卖预警、SMC 扫荡/结构（全部用当前默认参数，盲测前冻结）；
 - 评估：信号后 **下一日开盘成交**，持有 5/10 日收益；
   卖点准确率=未来收益<0 比例，买点准确率=未来收益>0 比例。
@@ -127,7 +127,7 @@ def main() -> None:
     for s in sample:
         code = s["code"]
         try:
-            rows = astock.kline(code, category=4, offset=800)
+            rows = astock.kline(code, category=4, offset=260)
         except Exception:  # noqa: BLE001
             continue
         if len(rows) < 250:
@@ -152,7 +152,7 @@ def main() -> None:
         "# 全市场随机 50 只盲测：信号方向准确率",
         "",
         f"> 生成时间：{datetime.now().strftime('%Y-%m-%d %H:%M')}　seed={SEED}　有效股票：{len(used)}/{len(sample)}",
-        "> 口径：腾讯日K（约800根≈3.3年，qfq；接口上限无法取满5年）；信号后下一日开盘成交；",
+        "> 口径：腾讯日K（最大260根≈1年，qfq）；信号后按确认延迟成交；",
         "> 参数在盲测前冻结（ATR/缠论/SMC 默认值）。",
         "",
         "## 策略维度",

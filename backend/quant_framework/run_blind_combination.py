@@ -96,7 +96,7 @@ def main() -> None:
     for s in sample:
         code = s["code"]
         try:
-            rows = astock.kline(code, category=4, offset=800)
+            rows = astock.kline(code, category=4, offset=260)
         except Exception:  # noqa: BLE001
             continue
         if len(rows) < 250:
