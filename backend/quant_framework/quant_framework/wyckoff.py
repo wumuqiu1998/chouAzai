@@ -127,9 +127,9 @@ def analyze_wyckoff(
                     "phase": ph["phase"],
                     "start": ph["start"],
                     "end": ph["end"],
-                    "low": round(lo, 4),
-                    "high": round(hi, 4),
-                    "mid": round(mid, 4),
+                    "low": round(lo, 2),
+                    "high": round(hi, 2),
+                    "mid": round(mid, 2),
                 }
             break
 
@@ -140,6 +140,6 @@ def analyze_wyckoff(
         "current": {"phase": current["phase"], "since": current["start"], "days": sum(1 for b in bars if b["date"] >= current["start"])},
         "cost_zone": cost_zone,
         "signals": signals,
-        "last_close": round(last, 4),
+        "last_close": round(last, 2),
         "note": "阶段用 T 日收盘计算、T+1 生效；主力成本区为最近吸筹/派发区间的价格带",
     }

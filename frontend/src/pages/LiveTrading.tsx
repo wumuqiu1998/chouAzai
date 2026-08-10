@@ -821,6 +821,15 @@ function KLineModal({
           showSymbol: false,
           lineStyle: { width: 1, color, type: "dashed", opacity: 0.75 },
           emphasis: { disabled: true },
+          endLabel: {
+            show: true,
+            color,
+            fontSize: 10,
+            formatter: (p: unknown) => {
+              const v = (p as { value?: number }).value;
+              return v == null ? "" : Number(v).toFixed(2);
+            },
+          },
           z: 3,
         });
         legendData.push(label);

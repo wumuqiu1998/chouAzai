@@ -119,8 +119,8 @@ def find_zhongshu(bis: list[dict], min_overlap: int = 3) -> list[dict]:
                     "end_pos": seg[-1]["pos"],
                     "start_date": seg[0]["date"],
                     "end_date": seg[-1]["date"],
-                    "zd": round(zd, 4),
-                    "zg": round(zg, 4),
+                    "zd": round(zd, 2),
+                    "zg": round(zg, 2),
                 }
             )
     # 简化口径：保留每个"连续 3 笔重叠窗"作为独立中枢，不做激进合并，
@@ -147,7 +147,7 @@ def buy_sell_points(bis: list[dict], zhongshu: list[dict], min_same_kind_gap: in
         if kind in last_pos and pos - last_pos[kind] < min_same_kind_gap:
             return
         last_pos[kind] = pos
-        pts.append({"kind": kind, "date": date, "price": round(price, 4), "note": note})
+        pts.append({"kind": kind, "date": date, "price": round(price, 2), "note": note})
 
     for z in zhongshu:
         start_idx = next((i for i, b in enumerate(bis) if b["pos"] == z["start_pos"]), None)
@@ -215,7 +215,7 @@ def zhongshu_break_warns(bars: list[dict], zhongshu: list[dict], min_same_kind_g
                     {
                         "kind": "sell3_warn",
                         "date": str(b["datetime"]),
-                        "price": round(close, 4),
+                        "price": round(close, 2),
                         "note": f"收盘跌破中枢上沿 ZG={z['zg']:.2f}，三卖预警（等回抽不破 ZD={z['zd']:.2f} 确认三卖）",
                         "pos": i,
                     }
