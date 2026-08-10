@@ -78,8 +78,19 @@ def build_events(df: pd.DataFrame) -> list[dict]:
     return out
 
 
-def run_portfolio(events: list[dict], max_positions: int, per_trade_cap: float, close_map: dict[str, dict[str, float]]) -> dict:
-    """按日期顺序执行；持仓每日按当日收盘价估值（回撤真实），到期日按 sell_px 平仓。"""
+def run_portfolio(
+    events: list[dict],
+    max_positions: int,
+    per_trade_cap: float,
+    close_map: dict[str, dict[str, float]],
+    exit_rule: str = "fixed",
+    stop_loss: float = 0.08,
+    take_profit: float = 0.08,
+    market_ok: dict[str, bool] | None = None,
+) -> dict:
+    """按日期顺序执行；持仓每日按当日收盘价估值，退出规则可选：
+    fixed=到期卖出；stop=跌破-8%止损；take=涨超+8%止盈；both=止损+止盈。
+    """
     ev = sorted(events, key=lambda x: (x["buy_date"], {"buy1": 0, "buy2": 1, "buy3": 2}.get(x["type"], 3)))
     by_buy: dict[str, list] = defaultdict(list)
     for e in ev:
@@ -94,11 +105,23 @@ def run_portfolio(events: list[dict], max_positions: int, per_trade_cap: float, 
     last_close_vals: dict[str, float] = {}
 
     for day in all_dates:
-        # 1) 先处理到期卖出
+        # 1) 先处理到期卖出与提前退出（止损/止盈）
         remaining: list[dict] = []
+        day_closes = close_map.get(day, {})
         for pos in positions:
-            if pos["sell_date"] == day:
-                sell_px = pos["sell_px"]
+            exit_now = pos["sell_date"] == day
+            exit_px = pos["sell_px"]
+            if not exit_now and exit_rule != "fixed":
+                px = day_closes.get(pos["code"], pos["last_px"])
+                ratio = px / pos["cost"] - 1.0
+                if exit_rule in ("stop", "both") and ratio <= -stop_loss:
+                    exit_now = True
+                    exit_px = px
+                elif exit_rule in ("take", "both") and ratio >= take_profit:
+                    exit_now = True
+                    exit_px = px
+            if exit_now:
+                sell_px = exit_px
                 gross = pos["shares"] * sell_px
                 fee = gross * (COMMISSION + STAMP + SLIPPAGE)
                 cash += gross - fee
@@ -110,6 +133,8 @@ def run_portfolio(events: list[dict], max_positions: int, per_trade_cap: float, 
 
         # 2) 买入当日信号（受持仓上限与现金约束）
         for e in by_buy.get(day, []):
+            if market_ok is not None and not market_ok.get(day, True):
+                break  # 大盘弱势日不开新仓（市场过滤）
             if len(positions) >= max_positions:
                 break
             budget = min(cash, CAPITAL * per_trade_cap)
@@ -139,8 +164,7 @@ def run_portfolio(events: list[dict], max_positions: int, per_trade_cap: float, 
             )
             trades.append({"date": day, "side": "buy", "code": e["type"], "type": e["type"], "amount": round(amount, 2)})
 
-        # 3) 盯市估值：用当日收盘价（缺失时沿用上次收盘价），到期日仍在持仓时用 sell_px 成交价
-        day_closes = close_map.get(day, {})
+        # 3) 盯市估值：用当日收盘价（缺失时沿用上次收盘价）
         for p in positions:
             px = day_closes.get(p["code"], p["last_px"])
             p["last_px"] = px
@@ -175,6 +199,19 @@ def main() -> None:
     events_all: list[dict] = []
     close_map: dict[str, dict[str, float]] = {}
     used = 0
+    # 大盘过滤：上证指数收盘 > MA20（用前一日数据判断，T-1 生效，无未来函数）
+    market_ok: dict[str, bool] | None = None
+    try:
+        idx = astock.index_kline("sh000001", offset=300)
+        idf = pd.DataFrame(idx)
+        idf["datetime"] = pd.to_datetime(idf["datetime"])
+        idf = idf.sort_values("datetime").reset_index(drop=True)
+        idf["ma20"] = idf["close"].rolling(20).mean()
+        idf["ok"] = (idf["close"].shift(1) > idf["ma20"].shift(1)).fillna(True)
+        market_ok = {str(row["datetime"].date()): bool(row["ok"]) for _, row in idf.iterrows()}
+        print(f"[info] 大盘过滤已启用：指数 {len(market_ok)} 个交易日", flush=True)
+    except Exception as e:  # noqa: BLE001
+        print(f"[warn] 大盘过滤不可用：{e}", flush=True)
     for s in sample:
         code = s["code"]
         try:
@@ -203,24 +240,26 @@ def main() -> None:
         "> 口径：T+2 开盘买入、持有 5 日收盘卖出；佣金 0.0003×2 + 印花税 0.0005 + 滑点 0.0001×2；",
         "> 涨停开盘买不进跳过、跌停收盘卖不出按估值并标记；资金池 100 万。",
         "",
-        "| 持仓上限 | 单票仓位 | 交易笔数 | 胜率 | 总收益 | 最大回撤 | 期末权益 | 跌停估值笔数 |",
-        "|---|---|---|---|---|---|---|---|",
+        "| 退出规则 | 持仓上限 | 单票仓位 | 交易笔数 | 胜率 | 总收益 | 最大回撤 | 期末权益 | 跌停估值笔数 |",
+        "|---|---|---|---|---|---|---|---|---|",
     ]
     results = []
-    for mp in (5, 10):
-        for cap in (0.1, 0.2):
-            r = run_portfolio(events_all, mp, cap, close_map)
+    for rule in ("fixed", "both", "stop", "take", "both+mkt"):
+        for mp, cap in ((5, 0.1), (5, 0.2), (10, 0.1), (10, 0.2)):
+            r = run_portfolio(
+                events_all, mp, cap, close_map,
+                exit_rule="both" if rule == "both+mkt" else rule,
+                market_ok=market_ok if rule == "both+mkt" else None,
+            )
             results.append(r)
             lines.append(
-                f"| {mp} | {cap:.0%} | {r['n_trades']} | {r['win_rate'] * 100:.0f}% | {r['total_ret'] * 100:+.1f}% | {r['mdd'] * 100:.1f}% | {r['final_equity']:,.0f} | {r['blocked_sells']} |"
+                f"| {rule} | {mp} | {cap:.0%} | {r['n_trades']} | {r['win_rate'] * 100:.0f}% | {r['total_ret'] * 100:+.1f}% | {r['mdd'] * 100:.1f}% | {r['final_equity']:,.0f} | {r['blocked_sells']} |"
             )
 
     best = max(results, key=lambda x: x["total_ret"])
     lines += ["", "## 结论", ""]
-    lines.append(f"- 最优组合：持仓上限 {best['max_positions']}、单票仓位 {best['per_trade_cap']:.0%}，"
-                 f"总收益 {best['total_ret'] * 100:+.1f}%、最大回撤 {best['mdd'] * 100:.1f}%、胜率 {best['win_rate'] * 100:.0f}%（{best['n_trades']} 笔）")
-    lines.append("- 单笔净收益基准（上一轮）：缠论买点 +3.29% vs 随机 +0.12%，超额 +3.17%；组合回测检验容量与回撤。")
-    lines.append("- 若组合收益远低于单笔基准 × 笔数，说明持仓上限/资金约束吞掉了大部分 Alpha（容量问题）。")
+    lines.append(f"- 固定持有 vs 动态退出：对比止损-8%/止盈+8%/两者组合，看回撤与收益变化。")
+    lines.append("- 若动态退出显著改善回撤且不伤收益，固定持有口径确实高估/低估了真实可交易性。")
     OUT.write_text("\n".join(lines), encoding="utf-8")
     print(f"\n报告已生成：{OUT}")
 
