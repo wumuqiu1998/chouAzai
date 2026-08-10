@@ -368,6 +368,8 @@ def minute_line(code: str) -> dict:
     points: list[dict] = []
     cum_amt = 0.0
     cum_shares = 0.0
+    prev_raw_vol = 0.0
+    prev_raw_amt = 0.0
     for line in raw or []:
         if isinstance(line, str):
             parts = line.split()
@@ -388,10 +390,16 @@ def minute_line(code: str) -> dict:
             a = float(amt)
         except (TypeError, ValueError):
             continue
-        cum_shares += v * 100.0  # 手 → 股
-        cum_amt += a
+        # 腾讯分时 volume/amount 是“截至该分钟的累计值”，转成每分钟增量，
+        # 与同花顺分时量柱/均价口径一致
+        delta = max(0.0, v - prev_raw_vol)
+        amt_delta = max(0.0, a - prev_raw_amt)
+        prev_raw_vol = v
+        prev_raw_amt = a
+        cum_shares += delta * 100.0  # 手 → 股
+        cum_amt += amt_delta
         avg = round(cum_amt / cum_shares, 2) if cum_shares > 0 else p
-        points.append({"time": t, "price": p, "avg_price": avg, "volume": v})
+        points.append({"time": t, "price": p, "avg_price": avg, "volume": delta})
     return {"code": code, "name": name, "prev_close": prev_close, "points": points}
 
 

@@ -1012,7 +1012,7 @@ function KLineModal({
             .filter((p) => typeof p.seriesName === "string" && p.seriesName.startsWith("MA"))
             .map((p) => `${p.seriesName} ${p.value == null ? "—" : Number(p.value).toFixed(2)}`)
             .join("　");
-          return `${b.date}<br/>开 ${b.o.toFixed(2)}　收 ${b.c.toFixed(2)}<br/>高 ${b.h.toFixed(2)}　低 ${b.l.toFixed(2)}<br/>涨跌幅 <span style="color:${col}">${chgPct >= 0 ? "+" : ""}${chgPct.toFixed(2)}%</span><br/>${mas}<br/>量 ${fmt(b.v)}`;
+          return `${b.date}<br/>开 ${b.o.toFixed(2)}　收 ${b.c.toFixed(2)}<br/>高 ${b.h.toFixed(2)}　低 ${b.l.toFixed(2)}<br/>涨跌幅 <span style="color:${col}">${chgPct >= 0 ? "+" : ""}${chgPct.toFixed(2)}%</span><br/>${mas}<br/>量 ${fmt(b.v)} 手`;
         },
       },
       legend: { data: legendData, textStyle: { color: "#a8a29e" }, top: 0 },
@@ -1175,7 +1175,7 @@ function KLineModal({
             })
             .filter(Boolean)
             .join("　");
-          return `${fmtMinuteTime(p.time)}<br/>价 ${p.price.toFixed(2)}　均价 ${p.avg_price.toFixed(2)}<br/>涨幅 <span style="color:${col}">${chgPct >= 0 ? "+" : ""}${chgPct.toFixed(2)}%</span><br/>${maText}<br/>量 ${fmt(p.volume)}`;
+          return `${fmtMinuteTime(p.time)}<br/>价 ${p.price.toFixed(2)}　均价 ${p.avg_price.toFixed(2)}<br/>涨幅 <span style="color:${col}">${chgPct >= 0 ? "+" : ""}${chgPct.toFixed(2)}%</span><br/>${maText}<br/>量 ${fmt(p.volume)} 手`;
         },
       },
       legend: {
