@@ -1383,10 +1383,14 @@ function KLineModal({
           type: "bar",
           xAxisIndex: 1,
           yAxisIndex: 1,
-          data: pts.map((p) => ({
-            value: p.volume,
-            itemStyle: { color: p.price >= minute.prev_close ? "rgba(239,68,68,.45)" : "rgba(34,197,94,.45)" },
-          })),
+          data: pts.map((p, i) => {
+            const base = i === 0 ? minute.prev_close : pts[i - 1].price;
+            const up = p.price >= base;
+            return {
+              value: p.volume,
+              itemStyle: { color: up ? "rgba(239,68,68,.45)" : "rgba(34,197,94,.45)" },
+            };
+          }),
         },
       ],
     });
