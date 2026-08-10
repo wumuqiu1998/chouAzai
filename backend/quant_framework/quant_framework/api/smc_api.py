@@ -66,6 +66,7 @@ def smc_analyze(
     code: str = Query(...),
     category: int = Query(4),
     offset: int = Query(250, ge=60, le=800),
+    sweep_min_gap: int = Query(15, ge=0, le=60),
     exclude_last: bool = Query(False),
 ):
     """ICT/SMC 结构标注：FVG / 订单块 / 流动性扫荡 / 结构突破。"""
@@ -75,7 +76,7 @@ def smc_analyze(
     if exclude_last:
         df = df.iloc[:-1]
     try:
-        return analyze_smc(df)
+        return analyze_smc(df, sweep_min_gap=sweep_min_gap)
     except Exception as e:  # noqa: BLE001
         raise HTTPException(status_code=502, detail=f"ICT/SMC 分析失败：{e}")
 

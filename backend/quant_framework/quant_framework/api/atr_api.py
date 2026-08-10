@@ -23,6 +23,7 @@ def atr_analyze(
     confirm_amp_mult: float = Query(1.0, ge=0.0, le=5.0),
     min_same_kind_gap: int = Query(5, ge=0, le=60),
     max_confirm_bars: int = Query(3, ge=1, le=10),
+    warn_min_gap: int = Query(10, ge=1, le=60),
     exclude_last: bool = Query(False),
 ):
     """返回 ATR 通道（bars 与 K 线对齐）+ 超涨/超跌/顶底信号。
@@ -52,6 +53,7 @@ def atr_analyze(
         confirm_amp_mult=confirm_amp_mult,
         min_same_kind_gap=min_same_kind_gap,
         max_confirm_bars=max_confirm_bars,
+        warn_min_gap=warn_min_gap,
     )
     if exclude_last:
         from quant_framework.atr import _bar_key
@@ -75,6 +77,7 @@ def atr_stats(
     confirm_amp_mult: float = Query(1.0, ge=0.0, le=5.0),
     min_same_kind_gap: int = Query(5, ge=0, le=60),
     max_confirm_bars: int = Query(3, ge=1, le=10),
+    warn_min_gap: int = Query(10, ge=1, le=60),
     horizon: int = Query(5, ge=1, le=20),
 ):
     """顶/底信号样本外统计：信号后 horizon 根 K 线涨跌概率与平均收益。"""
@@ -97,4 +100,5 @@ def atr_stats(
         confirm_amp_mult=confirm_amp_mult,
         min_same_kind_gap=min_same_kind_gap,
         max_confirm_bars=max_confirm_bars,
+        warn_min_gap=warn_min_gap,
     )

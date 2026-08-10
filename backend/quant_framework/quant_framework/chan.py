@@ -232,7 +232,7 @@ def zhongshu_break_warns(bars: list[dict], zhongshu: list[dict], min_same_kind_g
     return warns
 
 
-def analyze_chan(df: pd.DataFrame, min_gap: int = 4, min_same_kind_gap: int = 20) -> dict:
+def analyze_chan(df: pd.DataFrame, min_gap: int = 4, min_same_kind_gap: int = 20, warn_gap: int = 30) -> dict:
     """对 OHLC DataFrame 做缠论分析，返回 bars/points/zhongshu/bi。"""
     df = df.sort_values("datetime").reset_index(drop=True)
     merged = merge_contained(df)
@@ -251,11 +251,11 @@ def analyze_chan(df: pd.DataFrame, min_gap: int = 4, min_same_kind_gap: int = 20
         }
         for r in df.itertuples()
     ]
-    points.extend(zhongshu_break_warns(bars, zhongshu, min_same_kind_gap=min_same_kind_gap))
+    points.extend(zhongshu_break_warns(bars, zhongshu, min_same_kind_gap=warn_gap))
     return {
         "bars": bars,
         "points": points,
         "zhongshu": zhongshu,
         "bi": bis,
-        "params": {"min_gap": min_gap, "min_same_kind_gap": min_same_kind_gap},
+        "params": {"min_gap": min_gap, "min_same_kind_gap": min_same_kind_gap, "warn_gap": warn_gap},
     }

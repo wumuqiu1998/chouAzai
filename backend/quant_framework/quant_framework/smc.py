@@ -19,6 +19,20 @@ from __future__ import annotations
 import pandas as pd
 
 
+def _filter_sweep_gap(sweeps: list[dict], min_gap: int) -> list[dict]:
+    """扫荡信号按日期做最小间隔过滤，避免主升浪中反复交替出现。"""
+    if min_gap <= 0 or len(sweeps) <= 1:
+        return sweeps
+    kept: list[dict] = []
+    last = ""
+    for s in sweeps:
+        d = str(s.get("date", ""))[:10]
+        if not last or (pd.Timestamp(d) - pd.Timestamp(last)).days >= min_gap:
+            kept.append(s)
+            last = d
+    return kept
+
+
 def _swings(df: pd.DataFrame, left: int = 2, right: int = 2) -> list[dict]:
     """局部高低点（分型）：中间 K 线高于/低于左右各 right 根。需右侧确认。"""
     highs = df["high"].astype(float).values
@@ -40,6 +54,7 @@ def analyze_smc(
     swing_left: int = 2,
     swing_right: int = 2,
     lookback: int = 80,
+    sweep_min_gap: int = 15,
 ) -> dict:
     d = df.copy()
     d["datetime"] = pd.to_datetime(d["datetime"])
@@ -161,7 +176,7 @@ def analyze_smc(
     return {
         "fvg": fvg[-lookback:],
         "ob": ob,
-        "sweeps": sweeps[-20:],
+        "sweeps": _filter_sweep_gap(sweeps[-20:], sweep_min_gap),
         "structure": structure,
         "note": "ICT/SMC 结构标注：FVG/OB/扫荡/结构突破，全部用已收盘数据、结构点需右侧确认",
     }

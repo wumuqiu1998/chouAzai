@@ -41,6 +41,7 @@ def compute_atr(
     confirm_amp_mult: float = 1.0,
     min_same_kind_gap: int = 5,
     max_confirm_bars: int = 3,
+    warn_min_gap: int = 10,
 ) -> dict:
     """计算 ATR 通道与超涨/超跌/顶底信号。
 
@@ -55,6 +56,8 @@ def compute_atr(
       min_same_kind_gap : 同类顶/底信号之间的最小 K 线间隔，防止连续抖动重复标记。
       max_confirm_bars  : 超涨/超跌段结束后，最多再等几根 K 线确认顶/底
                           （幅度未达阈值时顺延，价格反向则作废）。
+      warn_min_gap      : 超涨/超跌预警之间的最小 K 线间隔（预警只提示“进入极端区”，
+                          连续贴轨不重复标记，避免图上出现几十个三角）。
 
     返回：
       {
@@ -101,6 +104,8 @@ def compute_atr(
     signals: list[dict] = []
     last_top_i = -10**9
     last_bottom_i = -10**9
+    last_overheat_i = -10**9
+    last_oversold_i = -10**9
     heat_run: dict | None = None   # 当前连续超涨段：段内最高价/日期/段末收盘
     cold_run: dict | None = None   # 当前连续超跌段
     heat_pending: dict | None = None
@@ -111,14 +116,16 @@ def compute_atr(
         is_cold = pd.notna(oversold.iloc[i]) and bool(oversold.iloc[i])
 
         if is_heat:
-            signals.append(
-                {
-                    "date": date,
-                    "kind": "overheat",
-                    "price": round(float(close.iloc[i]), 2),
-                    "note": f"收盘 {close.iloc[i]:.2f} 突破上轨 {upper.iloc[i]:.2f}（MA{ma_period}+{mult}×ATR{atr.iloc[i]:.2f}），进入极端强势区，警惕见顶",
-                }
-            )
+            if i - last_overheat_i >= warn_min_gap:
+                signals.append(
+                    {
+                        "date": date,
+                        "kind": "overheat",
+                        "price": round(float(close.iloc[i]), 2),
+                        "note": f"收盘 {close.iloc[i]:.2f} 突破上轨 {upper.iloc[i]:.2f}（MA{ma_period}+{mult}×ATR{atr.iloc[i]:.2f}），进入极端强势区，警惕见顶",
+                    }
+                )
+                last_overheat_i = i
             if heat_run is None:
                 heat_run = {"max_high": float(high.iloc[i]), "max_high_i": i, "prev_close": float(close.iloc[i])}
             else:
@@ -128,14 +135,16 @@ def compute_atr(
                 heat_run["prev_close"] = float(close.iloc[i])
 
         if is_cold:
-            signals.append(
-                {
-                    "date": date,
-                    "kind": "oversold",
-                    "price": round(float(close.iloc[i]), 2),
-                    "note": f"收盘 {close.iloc[i]:.2f} 跌破下轨 {lower.iloc[i]:.2f}（MA{ma_period}-{mult}×ATR{atr.iloc[i]:.2f}），进入极端弱势区，警惕见底",
-                }
-            )
+            if i - last_oversold_i >= warn_min_gap:
+                signals.append(
+                    {
+                        "date": date,
+                        "kind": "oversold",
+                        "price": round(float(close.iloc[i]), 2),
+                        "note": f"收盘 {close.iloc[i]:.2f} 跌破下轨 {lower.iloc[i]:.2f}（MA{ma_period}-{mult}×ATR{atr.iloc[i]:.2f}），进入极端弱势区，警惕见底",
+                    }
+                )
+                last_oversold_i = i
             if cold_run is None:
                 cold_run = {"min_low": float(low.iloc[i]), "min_low_i": i, "prev_close": float(close.iloc[i])}
             else:
@@ -234,6 +243,7 @@ def compute_atr(
             "confirm_amp_mult": confirm_amp_mult,
             "min_same_kind_gap": min_same_kind_gap,
             "max_confirm_bars": max_confirm_bars,
+            "warn_min_gap": warn_min_gap,
         },
         "bars": bars,
         "signals": signals,
@@ -249,6 +259,7 @@ def atr_signal_stats(
     confirm_amp_mult: float = 1.0,
     min_same_kind_gap: int = 5,
     max_confirm_bars: int = 3,
+    warn_min_gap: int = 10,
 ) -> dict:
     """顶/底信号的样本外统计：信号后 horizon 根 K 线的涨跌概率与平均收益。"""
     d = df.copy()
@@ -263,6 +274,7 @@ def atr_signal_stats(
         confirm_amp_mult=confirm_amp_mult,
         min_same_kind_gap=min_same_kind_gap,
         max_confirm_bars=max_confirm_bars,
+        warn_min_gap=warn_min_gap,
     )
     idx_of = {str(row["datetime"]): i for i, row in d.iterrows()}
 

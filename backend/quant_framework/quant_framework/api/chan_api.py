@@ -17,6 +17,7 @@ def chan_analyze(
     category: int = Query(4),
     offset: int = Query(250, ge=60, le=800),
     window: int | None = Query(None, ge=20, le=800),
+    warn_gap: int = Query(30, ge=1, le=120),
     exclude_last: bool = Query(False),
 ):
     """返回缠论结构：bars + points(买卖点) + zhongshu(中枢) + bi(笔)。
@@ -38,6 +39,6 @@ def chan_analyze(
     if window is not None:
         df = df.tail(window)
     analyze_df = df.iloc[:-1] if exclude_last else df
-    result = analyze_chan(analyze_df)
+    result = analyze_chan(analyze_df, warn_gap=warn_gap)
     result["exclude_last"] = exclude_last
     return result
