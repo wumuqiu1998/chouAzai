@@ -18,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import astock  # noqa: E402
+from quant_framework.regime import build_regime_map  # noqa: E402
 from quant_framework.t_backtest import run_t_backtest  # noqa: E402
 
 CODES = ["000063", "600487", "000636", "300223", "516080"]
@@ -33,6 +34,8 @@ def main() -> None:
     OUT.parent.mkdir(parents=True, exist_ok=True)
     by_month: dict[str, float] = defaultdict(float)
     by_code: dict[str, float] = defaultdict(float)
+    by_regime: dict[str, float] = defaultdict(float)
+    regime_days: dict[str, int] = defaultdict(int)
     by_code_month: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
     detail: list[dict] = []
 
@@ -43,6 +46,13 @@ def main() -> None:
         df = pd.DataFrame(rows)
         df["datetime"] = pd.to_datetime(df["datetime"])
         df = df.sort_values("datetime").reset_index(drop=True)
+        try:
+            drows = astock.kline(code, category=4, offset=120)
+            ddf = pd.DataFrame(drows)
+            ddf["datetime"] = pd.to_datetime(ddf["datetime"])
+            regime_map = build_regime_map(ddf)
+        except Exception:  # noqa: BLE001
+            regime_map = None
         avail = len(pd.Series(df["datetime"].dt.date).unique())
         days = min(100, avail)
         res = run_t_backtest(
@@ -54,12 +64,16 @@ def main() -> None:
             df=df,
             trade_pct=0.5,
             stamp_duty=0.0005,
+            regime=regime_map,
         )
         for d in res["daily"]:
             ym = str(d["date"])[:7]
             pnl = float(d["t_pnl"])
+            rg = str(d.get("regime") or "range")
             by_month[ym] += pnl
             by_code[code] += pnl
+            by_regime[rg] += pnl
+            regime_days[rg] += 1
             by_code_month[code][ym] += pnl
             detail.append({"code": code, "ym": ym, "pnl": pnl})
         print(f"{code}: T收益 {res['summary']['t_pnl']:+.0f}（{days}日，blocked={res['summary']['blocked_trades']}）")
@@ -83,6 +97,12 @@ def main() -> None:
     lines += ["", "## 按月份", "", "| 月份 | T收益 | 占比 |", "|---|---|---|"]
     for ym, pnl in sorted(by_month.items(), key=lambda x: -x[1]):
         lines.append(f"| {ym} | {pnl:+.0f} | {pnl / total * 100:.1f}% |" if total else f"| {ym} | {pnl:+.0f} | - |")
+
+    lines += ["", "## 按自身趋势状态（MA20/MA60）", "", "| 状态 | T收益 | 占比 | 天数 |", "|---|---|---|---|"]
+    for rg in ("up", "down", "range"):
+        pnl = by_regime.get(rg, 0.0)
+        days = regime_days.get(rg, 0)
+        lines.append(f"| {rg} | {pnl:+.0f} | {pnl / total * 100:.1f}% | {days} |" if total else f"| {rg} | {pnl:+.0f} | - | {days} |")
 
     top2_code = sum(v for _, v in sorted(by_code.items(), key=lambda x: -x[1])[:2])
     top2_month = sum(v for _, v in sorted(by_month.items(), key=lambda x: -x[1])[:2])

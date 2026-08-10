@@ -307,6 +307,9 @@ def run_band_t_backtest(
     daily_df: pd.DataFrame | None = None,
     regime: dict | None = None,
     df: pd.DataFrame | None = None,
+    enforce_limit: bool = True,
+    limit_up_pct: float = 0.098,
+    limit_down_pct: float = 0.098,
 ) -> dict:
     """中枢上下轨做T：ZD（下沿）低吸 / ZG（上沿）高抛。
 
@@ -341,6 +344,19 @@ def run_band_t_backtest(
     vols = df["volume"].values
     avg_vol = df["volume"].rolling(vol_window, min_periods=vol_window).mean().values
     last_idx_by_day = df.groupby(df["datetime"].dt.date).apply(lambda g: g.index[-1]).to_dict()
+
+    def _limit_blocked(i: int, side: str, use_close: bool = False) -> bool:
+        if not enforce_limit or i <= 0:
+            return False
+        prev = float(closes[i - 1])
+        if prev <= 0:
+            return False
+        chg = (float(closes[i]) if use_close else float(opens[i])) / prev - 1.0
+        if side == "buy" and chg >= limit_up_pct - 1e-6:
+            return True
+        if side == "sell" and chg <= -limit_down_pct + 1e-6:
+            return True
+        return False
 
     # 大级别方向：日线收盘 vs MA(trend_period)，用前一日收盘判定当日方向（无未来函数）
     direction: dict = {}
@@ -403,6 +419,7 @@ def run_band_t_backtest(
     # 2) 逐日执行：开/平仓配对，收盘强制回补
     t_cash = 0.0
     fees_total = 0.0
+    blocked_count = 0
     trades_log: list[dict] = []
     daily: list[dict] = []
 
@@ -414,6 +431,10 @@ def run_band_t_backtest(
             i = t["exec_i"]
             exec_price = float(opens[i])
             if t["side"] == "buy":
+                if _limit_blocked(i, "buy"):
+                    blocked_count += 1
+                    trades_log.append({"date": day, "side": "blocked", "kind": "trigger_buy", "price": round(exec_price, 3), "shares": trade_size})
+                    continue
                 # 关闭空头腿（先卖后买场景）
                 shorts = [lg for lg in legs if lg["dir"] == "short"]
                 if shorts:
@@ -438,6 +459,10 @@ def run_band_t_backtest(
                     legs.append({"dir": "long", "price": px, "size": trade_size})
                     trades_log.append({"date": day, "side": "buy", "kind": "open_long", "price": round(px, 3), "shares": trade_size})
             else:
+                if _limit_blocked(i, "sell"):
+                    blocked_count += 1
+                    trades_log.append({"date": day, "side": "blocked", "kind": "trigger_sell", "price": round(exec_price, 3), "shares": trade_size})
+                    continue
                 longs = [lg for lg in legs if lg["dir"] == "long"]
                 if longs:
                     lg = longs.pop(0)
@@ -466,6 +491,9 @@ def run_band_t_backtest(
             px = float(closes[last_idx])
             for lg in legs:
                 if lg["dir"] == "long":
+                    if _limit_blocked(last_idx, "sell", use_close=True):
+                        blocked_count += 1
+                        trades_log.append({"date": day, "side": "blocked_restore", "kind": "force_close_long", "price": round(px, 3), "shares": lg["size"]})
                     sell_px = px * (1 - slippage)
                     amount = sell_px * lg["size"]
                     fee = amount * (commission + stamp_duty)
@@ -474,6 +502,9 @@ def run_band_t_backtest(
                     gross = (sell_px - lg["price"]) * lg["size"]
                     trades_log.append({"date": day, "side": "sell", "kind": "force_close_long", "price": round(sell_px, 3), "shares": lg["size"], "paired_pnl": round(gross, 2)})
                 else:
+                    if _limit_blocked(last_idx, "buy", use_close=True):
+                        blocked_count += 1
+                        trades_log.append({"date": day, "side": "blocked_restore", "kind": "force_close_short", "price": round(px, 3), "shares": lg["size"]})
                     buy_px = px * (1 + slippage)
                     amount = buy_px * lg["size"]
                     fee = amount * commission
@@ -524,6 +555,7 @@ def run_band_t_backtest(
             "positive_days": sum(1 for d in daily if d["t_pnl"] > 0),
             "base_mtm": round(base_shares * (last_close - base_price), 2),
             "t_pnl_per_day": round(t_pnl / len(daily), 2),
+            "blocked_trades": blocked_count,
         },
         "trades": trades_log,
     }

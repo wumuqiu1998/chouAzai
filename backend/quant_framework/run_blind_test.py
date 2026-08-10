@@ -78,19 +78,19 @@ def collect_signals(df: pd.DataFrame) -> list[dict]:
             continue
         i = im.get(s["date"])
         if i is not None:
-            out.append({"i": i, "strategy": "ATR", "label": "顶" if s["kind"] == "top" else "底", "side": "sell" if s["kind"] == "top" else "buy"})
+            out.append({"i": i, "strategy": "ATR", "label": "顶" if s["kind"] == "top" else "底", "side": "sell" if s["kind"] == "top" else "buy", "exec_offset": 1})
     label_map = {"buy1": "B1", "buy2": "B2", "buy3": "B3", "sell1": "S1", "sell2": "S2", "sell3": "S3", "sell3_warn": "警"}
     for p in analyze_chan(df)["points"]:
         i = im.get(p["date"])
         label = label_map.get(p["kind"])
         if i is None or label is None:
             continue
-        out.append({"i": i, "strategy": "缠论", "label": label, "side": "sell" if p["kind"].startswith("sell") else "buy"})
+        out.append({"i": i, "strategy": "缠论", "label": label, "side": "sell" if p["kind"].startswith("sell") else "buy", "exec_offset": 2})
     smc = analyze_smc(df, sweep_min_gap=15)
     for s in smc.get("sweeps") or []:
         i = im.get(s["date"])
         if i is not None:
-            out.append({"i": i, "strategy": "SMC", "label": "扫", "side": "buy" if s["kind"] == "bullish" else "sell"})
+            out.append({"i": i, "strategy": "SMC", "label": "扫", "side": "buy" if s["kind"] == "bullish" else "sell", "exec_offset": 3})
     st = smc.get("structure") or {}
     for key, side in (("last_bos", None), ("last_choch", "sell")):
         item = st.get(key)
@@ -101,17 +101,18 @@ def collect_signals(df: pd.DataFrame) -> list[dict]:
             continue
         if key == "last_bos":
             side = "buy" if item["kind"] == "bullish" else "sell"
-        out.append({"i": i, "strategy": "SMC", "label": "突" if (key == "last_bos" and item["kind"] == "bullish") else ("破" if key == "last_bos" else "变"), "side": side})
+        out.append({"i": i, "strategy": "SMC", "label": "突" if (key == "last_bos" and item["kind"] == "bullish") else ("破" if key == "last_bos" else "变"), "side": side, "exec_offset": 3})
     return out
 
 
-def eval_signal(opens: np.ndarray, closes: np.ndarray, idx: int, horizon: int) -> dict | None:
-    if idx + 1 + horizon >= len(closes):
+def eval_signal(opens: np.ndarray, closes: np.ndarray, idx: int, horizon: int, exec_offset: int = 1) -> dict | None:
+    # 不同信号确认延迟不同：ATR 次日开盘(+1)；缠论分型需右侧确认(+2)；SMC swing 需右侧2根(+3)
+    if idx + exec_offset + horizon >= len(closes):
         return None
-    base = opens[idx + 1]
+    base = opens[idx + exec_offset]
     if base <= 0:
         return None
-    ret = closes[idx + 1 + horizon] / base - 1.0
+    ret = closes[idx + exec_offset + horizon] / base - 1.0
     return {"ret": ret}
 
 
@@ -138,8 +139,8 @@ def main() -> None:
         closes = df["close"].astype(float).values
         used.append(f"{code} {s['name']}({len(df)}根)")
         for sig in collect_signals(df):
-            e5 = eval_signal(opens, closes, sig["i"], 5)
-            e10 = eval_signal(opens, closes, sig["i"], 10)
+            e5 = eval_signal(opens, closes, sig["i"], 5, sig.get("exec_offset", 1))
+            e10 = eval_signal(opens, closes, sig["i"], 10, sig.get("exec_offset", 1))
             key = f"{sig['strategy']}|{sig['side']}"
             if e5:
                 stats[key]["n"] += 1
