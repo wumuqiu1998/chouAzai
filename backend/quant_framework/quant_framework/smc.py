@@ -72,8 +72,8 @@ def analyze_smc(
                 {
                     "date": str(d["datetime"].iloc[i + 2])[:16].replace(" 00:00", ""),
                     "kind": "bullish",
-                    "bottom": round(float(high.iloc[i]), 4),
-                    "top": round(float(low.iloc[i + 2]), 4),
+                    "bottom": round(float(high.iloc[i]), 2),
+                    "top": round(float(low.iloc[i + 2]), 2),
                 }
             )
         elif low.iloc[i] > high.iloc[i + 2] + 1e-9:
@@ -81,8 +81,8 @@ def analyze_smc(
                 {
                     "date": str(d["datetime"].iloc[i + 2])[:16].replace(" 00:00", ""),
                     "kind": "bearish",
-                    "bottom": round(float(high.iloc[i + 2]), 4),
-                    "top": round(float(low.iloc[i]), 4),
+                    "bottom": round(float(high.iloc[i + 2]), 2),
+                    "top": round(float(low.iloc[i]), 2),
                 }
             )
     # 标记是否已被回补（用截至当前的价格区间）
@@ -99,8 +99,8 @@ def analyze_smc(
                 {
                     "date": str(d["datetime"].iloc[i])[:16].replace(" 00:00", ""),
                     "kind": "bullish",
-                    "bottom": round(float(low.iloc[i]), 4),
-                    "top": round(float(high.iloc[i]), 4),
+                    "bottom": round(float(low.iloc[i]), 2),
+                    "top": round(float(high.iloc[i]), 2),
                 }
             )
         # 看跌 OB：前面 2+ 根阳线，当前为阴线
@@ -110,8 +110,8 @@ def analyze_smc(
                 {
                     "date": str(d["datetime"].iloc[i])[:16].replace(" 00:00", ""),
                     "kind": "bearish",
-                    "bottom": round(float(low.iloc[i]), 4),
-                    "top": round(float(high.iloc[i]), 4),
+                    "bottom": round(float(low.iloc[i]), 2),
+                    "top": round(float(high.iloc[i]), 2),
                 }
             )
     # 只保留最近 lookback 个，去重（同方向连续只取最后）
@@ -134,7 +134,7 @@ def analyze_smc(
                 {
                     "date": str(d["datetime"].iloc[i])[:16].replace(" 00:00", ""),
                     "kind": "bearish",
-                    "price": round(float(close.iloc[i]), 4),
+                    "price": round(float(close.iloc[i]), 2),
                     "note": f"突破前高 {recent_high['price']:.2f} 后收回，扫掉追多止损（卖方流动性）→ 潜在反转",
                 }
             )
@@ -143,7 +143,7 @@ def analyze_smc(
                 {
                     "date": str(d["datetime"].iloc[i])[:16].replace(" 00:00", ""),
                     "kind": "bullish",
-                    "price": round(float(close.iloc[i]), 4),
+                    "price": round(float(close.iloc[i]), 2),
                     "note": f"跌破前低 {recent_low['price']:.2f} 后收回，扫掉割肉止损（买方流动性）→ 潜在反转",
                 }
             )

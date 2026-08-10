@@ -252,10 +252,14 @@ def analyze_chan(df: pd.DataFrame, min_gap: int = 4, min_same_kind_gap: int = 20
         for r in df.itertuples()
     ]
     points.extend(zhongshu_break_warns(bars, zhongshu, min_same_kind_gap=warn_gap))
+    bi_out = [
+        {"pos": b["pos"], "date": b["date"], "price": round(b["price"], 2), "kind": b["kind"]}
+        for b in bis
+    ]
     return {
         "bars": bars,
         "points": points,
         "zhongshu": zhongshu,
-        "bi": bis,
+        "bi": bi_out,
         "params": {"min_gap": min_gap, "min_same_kind_gap": min_same_kind_gap, "warn_gap": warn_gap},
     }
