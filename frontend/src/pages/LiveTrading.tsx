@@ -864,7 +864,7 @@ function KLineModal({
             if (i === undefined) return null;
             const bar = data[i];
             const gap = chartRange * 0.02;
-            return { value: [i, isTop ? bar.h + gap : bar.l - gap], name: label, note: s.note, date: s.date };
+            return { value: [i, isTop ? bar.h + gap : bar.l - gap], name: label, note: s.note, date: s.date, price: s.price };
           })
           .filter((v) => v !== null);
         if (items.length === 0) return;
@@ -889,8 +889,10 @@ function KLineModal({
           tooltip: {
             show: true,
             formatter: (p: unknown) => {
-              const it = p as { data?: { date?: string; note?: string } };
-              return it.data?.date ? `<b>${label}</b>（${it.data.date.slice(0, 16)}）<br/>${it.data.note ?? ""}` : "";
+              const it = p as { data?: { date?: string; note?: string; price?: number } };
+              return it.data?.date
+                ? `<b>${label}</b>（${it.data.date.slice(0, 16)}）<br/>价格 ${Number(it.data.price).toFixed(2)}<br/>${it.data.note ?? ""}`
+                : "";
             },
           },
           z: 7,
@@ -1342,9 +1344,10 @@ function KLineModal({
                       label: s.label,
                       time: s.time,
                       note: s.note,
+                      price: s.price,
                     };
                   })
-                  .filter((v): v is { value: [number, number]; color: string; colorKey: string; label: string; time: string; note: string } => v !== null),
+                  .filter((v): v is { value: [number, number]; color: string; colorKey: string; label: string; time: string; note: string; price: number } => v !== null),
                 symbol: "circle",
                 symbolSize: 8,
                 itemStyle: {
@@ -1375,8 +1378,10 @@ function KLineModal({
                 tooltip: {
                   show: true,
                   formatter: (p: unknown) => {
-                    const it = p as { data?: { label?: string; time?: string; note?: string } };
-                    return it.data ? `<b>${it.data.label}</b>（${fmtMinuteTime(it.data.time ?? "")}）<br/>${it.data.note ?? ""}` : "";
+                    const it = p as { data?: { label?: string; time?: string; note?: string; price?: number } };
+                    return it.data
+                      ? `<b>${it.data.label}</b>（${fmtMinuteTime(it.data.time ?? "")}）<br/>价格 ${Number(it.data.price).toFixed(2)}<br/>${it.data.note ?? ""}`
+                      : "";
                   },
                 },
                 z: 10,
