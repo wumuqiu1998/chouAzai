@@ -32,6 +32,7 @@ import {
   type TurnoverTop,
 } from "@/lib/api";
 import { loadWatch, saveWatch, addCodes } from "@/lib/watchlist";
+import { storageGet, storageSet } from "@/lib/storage";
 import { useLiveQuotes, isTradingHours } from "@/hooks/useLiveQuotes";
 import { usePolling } from "@/hooks/usePolling";
 import { cn } from "@/lib/utils";
@@ -156,6 +157,17 @@ const pct = (v: number | undefined | null) => (v == null ? "—" : `${v > 0 ? "+
 const fmt = (v: number | null | undefined) => (v == null ? "—" : v.toLocaleString("zh-CN", { maximumFractionDigits: 2 }));
 
 const LIVE_KEY = "vr-live-on";
+const CHAN_KEY = "vr-kline-chan-on";
+const ATR_KEY = "vr-kline-atr-on";
+const WYCKOFF_KEY = "vr-kline-wyckoff-on";
+const SMC_KEY = "vr-kline-smc-on";
+
+const indicatorOn = (key: string) => storageGet(key) === "on";
+const toggleIndicator = (key: string, cur: boolean, set: (v: boolean) => void) => {
+  const next = !cur;
+  storageSet(key, next ? "on" : "off");
+  set(next);
+};
 const ALERT_KEY = "vr-alert-on";
 const loadLive = () => {
   try {
@@ -358,13 +370,13 @@ function KLineModal({
   const wyckoffCacheRef = useRef<Record<string, WyckoffData>>({});
   const smcCacheRef = useRef<Record<string, SmcData>>({});
   const resonanceCacheRef = useRef<Record<string, ResonanceData>>({});
-  const [chanOn, setChanOn] = useState(true);
+  const [chanOn, setChanOn] = useState(() => indicatorOn(CHAN_KEY));
   const [chanData, setChanData] = useState<ChanData | null>(null);
-  const [atrOn, setAtrOn] = useState(true);
+  const [atrOn, setAtrOn] = useState(() => indicatorOn(ATR_KEY));
   const [atrData, setAtrData] = useState<AtrData | null>(null);
-  const [wyckoffOn, setWyckoffOn] = useState(true);
+  const [wyckoffOn, setWyckoffOn] = useState(() => indicatorOn(WYCKOFF_KEY));
   const [wyckoffData, setWyckoffData] = useState<WyckoffData | null>(null);
-  const [smcOn, setSmcOn] = useState(true);
+  const [smcOn, setSmcOn] = useState(() => indicatorOn(SMC_KEY));
   const [smcData, setSmcData] = useState<SmcData | null>(null);
   const [resonance, setResonance] = useState<ResonanceData | null>(null);
   // 盘中实时：最后一根 K 线未收盘，指标只使用已收盘数据（排除末根）
@@ -1480,7 +1492,7 @@ function KLineModal({
             ))}
           </div>
           <button
-            onClick={() => setChanOn((v) => !v)}
+            onClick={() => toggleIndicator(CHAN_KEY, chanOn, setChanOn)}
             className={cn(
               "ml-2 rounded-md px-2 py-1 text-xs",
               chanOn ? "bg-warning/15 font-medium text-warning" : "bg-muted/40 text-muted-foreground hover:text-foreground",
@@ -1490,7 +1502,7 @@ function KLineModal({
             缠论{chanOn ? "开" : "关"}
           </button>
           <button
-            onClick={() => setAtrOn((v) => !v)}
+            onClick={() => toggleIndicator(ATR_KEY, atrOn, setAtrOn)}
             className={cn(
               "ml-1 rounded-md px-2 py-1 text-xs",
               atrOn ? "bg-orange-500/15 font-medium text-orange-400" : "bg-muted/40 text-muted-foreground hover:text-foreground",
@@ -1500,7 +1512,7 @@ function KLineModal({
             ATR{atrOn ? "开" : "关"}
           </button>
           <button
-            onClick={() => setWyckoffOn((v) => !v)}
+            onClick={() => toggleIndicator(WYCKOFF_KEY, wyckoffOn, setWyckoffOn)}
             className={cn(
               "ml-1 rounded-md px-2 py-1 text-xs",
               wyckoffOn ? "bg-cyan-500/15 font-medium text-cyan-400" : "bg-muted/40 text-muted-foreground hover:text-foreground",
@@ -1510,7 +1522,7 @@ function KLineModal({
             积派{wyckoffOn ? "开" : "关"}
           </button>
           <button
-            onClick={() => setSmcOn((v) => !v)}
+            onClick={() => toggleIndicator(SMC_KEY, smcOn, setSmcOn)}
             className={cn(
               "ml-1 rounded-md px-2 py-1 text-xs",
               smcOn ? "bg-fuchsia-500/15 font-medium text-fuchsia-400" : "bg-muted/40 text-muted-foreground hover:text-foreground",
