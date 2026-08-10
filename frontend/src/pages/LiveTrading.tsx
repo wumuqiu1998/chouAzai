@@ -839,7 +839,7 @@ function KLineModal({
             fontSize: 11,
             formatter: (p: unknown) => {
               const v = (p as { value?: number }).value;
-              return v == null ? "" : Number(v).toFixed(2);
+              return v != null && Number.isFinite(v) ? Number(v).toFixed(2) : "";
             },
           },
           z: 3,
@@ -1269,7 +1269,7 @@ function KLineModal({
                       lineStyle: { color: "rgba(52,211,153,.7)", type: "dashed", width: 1 },
                       label: { color: "#34d399", formatter: `昨低 ${dayRefData.ref_bar.low.toFixed(2)}` },
                     },
-                    ...(dayRefData.atr.upper != null
+                    ...(dayRefData.atr.upper != null && Number.isFinite(dayRefData.atr.upper)
                       ? [
                           {
                             yAxis: dayRefData.atr.upper,
@@ -1278,7 +1278,7 @@ function KLineModal({
                           },
                         ]
                       : []),
-                    ...(dayRefData.atr.lower != null
+                    ...(dayRefData.atr.lower != null && Number.isFinite(dayRefData.atr.lower)
                       ? [
                           {
                             yAxis: dayRefData.atr.lower,
