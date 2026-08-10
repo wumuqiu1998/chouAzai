@@ -35,6 +35,9 @@ def run_t_backtest(
     extra_points: list[dict] | None = None,
     include_warns: bool = False,
     skip_native_kinds: tuple[str, ...] = (),
+    enforce_limit: bool = True,
+    limit_up_pct: float = 0.098,
+    limit_down_pct: float = 0.098,
 ) -> dict:
     if df is None:
         import astock
@@ -59,6 +62,20 @@ def run_t_backtest(
     closes = df["close"].values
     dts = df["datetime"].values
     last_idx_by_day = df.groupby(df["datetime"].dt.date).apply(lambda g: g.index[-1]).to_dict()
+
+    def _limit_blocked(i: int, side: str, use_close: bool = False) -> bool:
+        """涨跌停/停牌约束：开盘相对昨收一字涨停买不进、一字跌停卖不出。"""
+        if not enforce_limit or i <= 0:
+            return False
+        prev = float(closes[i - 1])
+        if prev <= 0:
+            return False
+        chg = (float(closes[i]) if use_close else float(opens[i])) / prev - 1.0
+        if side == "buy" and chg >= limit_up_pct - 1e-6:
+            return True
+        if side == "sell" and chg <= -limit_down_pct + 1e-6:
+            return True
+        return False
 
     # 1) 逐 bar 因果生成信号（只用截至当前 bar 的数据）
     signals: list[dict] = []
@@ -85,6 +102,7 @@ def run_t_backtest(
     available = base_shares
     t_cash = 0.0
     fees_total = 0.0
+    blocked_count = 0
     trades_log: list[dict] = []
     daily: list[dict] = []
 
@@ -99,6 +117,11 @@ def run_t_backtest(
         for s in day_signals:
             i = s["exec_i"]
             exec_price = float(opens[i])
+            side = "buy" if not s["kind"].startswith("sell") else "sell"
+            if _limit_blocked(i, side):
+                blocked_count += 1
+                trades_log.append({"date": day, "side": "blocked", "kind": s["kind"], "price": round(exec_price, 3), "shares": 0})
+                continue
             if state == "up":
                 # 板块上升：顺趋势做多T（B点买入 → S点卖出；当日新买部分当日平，简化口径同中枢long腿）
                 if not s["kind"].startswith("sell"):
@@ -165,44 +188,56 @@ def run_t_backtest(
         if pending_sells:
             last_idx = last_idx_by_day[day]
             px = float(closes[last_idx]) * (1 + slippage)
-            rem = sum(p["shares"] for p in pending_sells)
-            amount = px * rem
-            fee = amount * commission
-            t_cash -= amount + fee
-            fees_total += fee
-            available += rem
-            for ps in pending_sells:
-                gross = (ps["price"] - px) * ps["shares"]
-                trades_log.append(
-                    {
-                        "date": day,
-                        "side": "force_buy",
-                        "kind": "restore",
-                        "price": round(px, 3),
-                        "shares": ps["shares"],
-                        "paired_pnl": round(gross, 2),
-                    }
-                )
+            if _limit_blocked(last_idx, "buy", use_close=True):
+                blocked_count += 1
+                trades_log.append({"date": day, "side": "blocked_restore", "kind": "restore", "price": round(px, 3), "shares": sum(p["shares"] for p in pending_sells)})
+                pending_sells.clear()
+            else:
+                rem = sum(p["shares"] for p in pending_sells)
+                amount = px * rem
+                fee = amount * commission
+                t_cash -= amount + fee
+                fees_total += fee
+                available += rem
+                for ps in pending_sells:
+                    gross = (ps["price"] - px) * ps["shares"]
+                    trades_log.append(
+                        {
+                            "date": day,
+                            "side": "force_buy",
+                            "kind": "restore",
+                            "price": round(px, 3),
+                            "shares": ps["shares"],
+                            "paired_pnl": round(gross, 2),
+                        }
+                    )
+                pending_sells.clear()
         elif pending_buys:
             last_idx = last_idx_by_day[day]
             px = float(closes[last_idx]) * (1 - slippage)
-            rem = sum(p["shares"] for p in pending_buys)
-            amount = px * rem
-            fee = amount * (commission + stamp_duty)
-            t_cash += amount - fee
-            fees_total += fee
-            for pb in pending_buys:
-                gross = (px - pb["price"]) * pb["shares"]
-                trades_log.append(
-                    {
-                        "date": day,
-                        "side": "force_sell",
-                        "kind": "restore",
-                        "price": round(px, 3),
-                        "shares": pb["shares"],
-                        "paired_pnl": round(gross, 2),
-                    }
-                )
+            if _limit_blocked(last_idx, "sell", use_close=True):
+                blocked_count += 1
+                trades_log.append({"date": day, "side": "blocked_restore", "kind": "restore", "price": round(px, 3), "shares": sum(p["shares"] for p in pending_buys)})
+                pending_buys.clear()
+            else:
+                rem = sum(p["shares"] for p in pending_buys)
+                amount = px * rem
+                fee = amount * (commission + stamp_duty)
+                t_cash += amount - fee
+                fees_total += fee
+                for pb in pending_buys:
+                    gross = (px - pb["price"]) * pb["shares"]
+                    trades_log.append(
+                        {
+                            "date": day,
+                            "side": "force_sell",
+                            "kind": "restore",
+                            "price": round(px, 3),
+                            "shares": pb["shares"],
+                            "paired_pnl": round(gross, 2),
+                        }
+                    )
+                pending_buys.clear()
 
         daily.append(
             {
@@ -243,6 +278,7 @@ def run_t_backtest(
             "positive_days": sum(1 for d in daily if d["t_pnl"] > 0),
             "base_mtm": round(base_shares * (last_close - base_price), 2),
             "t_pnl_per_day": round(t_pnl / len(daily), 2),
+            "blocked_trades": blocked_count,
         },
         "trades": trades_log,
     }

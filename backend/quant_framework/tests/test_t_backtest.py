@@ -109,6 +109,69 @@ def test_build_regime_map_shifts_no_future():
     assert all(v in {"up", "down", "range"} for v in m.values())
 
 
+def _mk_two_day_df(exec_open: float, last_close: float) -> pd.DataFrame:
+    days = pd.bdate_range("2026-01-02", periods=2)
+    times = ["09:30", "10:00", "10:30", "11:00"]
+    dts = pd.to_datetime([f"{d.date()} {t}" for d in days for t in times])
+    close = [10.0] * 8
+    close[7] = last_close
+    open_ = [10.0] * 8
+    open_[6] = exec_open
+    return pd.DataFrame(
+        {
+            "datetime": dts,
+            "open": open_,
+            "high": [max(o, c) * 1.01 for o, c in zip(open_, close)],
+            "low": [min(o, c) * 0.99 for o, c in zip(open_, close)],
+            "close": close,
+            "volume": [100000.0] * 8,
+        }
+    )
+
+
+def test_limit_blocked_on_limit_down_open():
+    from quant_framework.chan import _dt_key
+
+    # 第二日第3根开盘跌停（-10%），S 点应被挡；关闭约束时可成交
+    df = _mk_two_day_df(exec_open=9.0, last_close=9.5)
+    extra = [{"kind": "sell_test", "date": _dt_key(df["datetime"].iloc[4]), "price": 10.0}]
+    res_on = run_t_backtest(
+        base_price=10.0, base_shares=1000, days=2, category=11, offset=500, df=df, min_warmup=1, extra_points=extra
+    )
+    assert res_on["summary"]["blocked_trades"] >= 1
+    assert not any(t["side"] == "sell" for t in res_on["trades"])
+    res_off = run_t_backtest(
+        base_price=10.0, base_shares=1000, days=2, category=11, offset=500, df=df,
+        min_warmup=1, extra_points=extra, enforce_limit=False,
+    )
+    assert any(t["side"] == "sell" for t in res_off["trades"])
+
+
+def test_buy_blocked_on_limit_up_open():
+    from quant_framework.chan import _dt_key
+
+    # 第二日第3根开盘涨停（+10%），B 点应被挡
+    df = _mk_two_day_df(exec_open=11.0, last_close=10.5)
+    extra = [{"kind": "buy_test", "date": _dt_key(df["datetime"].iloc[4]), "price": 10.0}]
+    res = run_t_backtest(
+        base_price=10.0, base_shares=1000, days=2, category=11, offset=500, df=df, min_warmup=1, extra_points=extra
+    )
+    assert res["summary"]["blocked_trades"] >= 1
+    assert not any(t["side"] == "buy" for t in res["trades"])
+
+
+def test_restore_blocked_on_limit_up_close():
+    from quant_framework.chan import _dt_key
+
+    # S 点正常卖出，但收盘涨停买不回 → blocked_restore
+    df = _mk_two_day_df(exec_open=10.0, last_close=11.0)
+    extra = [{"kind": "sell_test", "date": _dt_key(df["datetime"].iloc[4]), "price": 10.0}]
+    res = run_t_backtest(
+        base_price=10.0, base_shares=1000, days=2, category=11, offset=500, df=df, min_warmup=1, extra_points=extra
+    )
+    assert any(t["side"] == "blocked_restore" for t in res["trades"])
+
+
 def test_t_backtest_regime_runs():
     rng = np.random.default_rng(3)
     n_days = 50

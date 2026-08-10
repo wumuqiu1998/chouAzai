@@ -4,7 +4,8 @@
 - 数据：腾讯 5 分钟K（约 7 个交易日，320 根），按交易日逐日计算信号，
   与分时图“当日分时实时计算”一致；
 - 信号：ATR 顶/底、缠论 B/S/三卖预警、SMC 扫荡/突/破/变、威科夫积/派；
-- 评估：信号 bar 收盘为基准，统计未来 3/6 根（15/30 分钟）收益：
+- 评估：信号后下一根开盘成交（做T不隔夜，当日最后信号跳过），
+  统计持有 3/6 根（15/30 分钟）收盘收益：
   卖点准确率 = 未来收益 <0 比例；买点准确率 = 未来收益 >0 比例；
   另统计“卖点后继续冲高幅度”“买点后继续探底幅度”衡量是否接近极值。
 - 局限：样本约 5 股 × 7 日，仅用于筛选方向，不构成验证。
@@ -138,15 +139,16 @@ def collect_signals(day_df: pd.DataFrame) -> list[dict]:
     return out
 
 
-def eval_signal(closes: np.ndarray, idx: int, horizon: int) -> dict | None:
-    if idx + horizon >= len(closes):
+def eval_signal(opens: np.ndarray, closes: np.ndarray, idx: int, horizon: int) -> dict | None:
+    """信号后下一根开盘成交，持有 horizon 根收盘（做T不隔夜，当日最后信号跳过）。"""
+    if idx + 1 + horizon >= len(closes):
         return None
-    base = closes[idx]
+    base = opens[idx + 1]
     if base <= 0:
         return None
-    ret = closes[idx + horizon] / base - 1.0
-    fwd_high = closes[idx + 1 : idx + horizon + 1].max() / base - 1.0
-    fwd_low = closes[idx + 1 : idx + horizon + 1].min() / base - 1.0
+    ret = closes[idx + 1 + horizon] / base - 1.0
+    fwd_high = closes[idx + 1 : idx + 1 + horizon + 1].max() / base - 1.0
+    fwd_low = closes[idx + 1 : idx + 1 + horizon + 1].min() / base - 1.0
     return {"ret": ret, "fwd_high": fwd_high, "fwd_low": fwd_low}
 
 
@@ -169,9 +171,10 @@ def main() -> None:
             if len(g) < MIN_BARS_PER_DAY:
                 continue
             closes = g["close"].astype(float).values
+            opens = g["open"].astype(float).values
             for sig in collect_signals(g):
-                e3 = eval_signal(closes, sig["time_idx"], 3)
-                e6 = eval_signal(closes, sig["time_idx"], 6)
+                e3 = eval_signal(opens, closes, sig["time_idx"], 3)
+                e6 = eval_signal(opens, closes, sig["time_idx"], 6)
                 key = f"{sig['strategy']}|{sig['side']}"
                 per_code[code] += 1
                 if e3:
@@ -189,7 +192,7 @@ def main() -> None:
         "# 分时信号准确性对比（自选股 × 5分钟K 代理）",
         "",
         f"> 生成时间：{datetime.now().strftime('%Y-%m-%d %H:%M')}　样本：{', '.join(CODES)}",
-        f"> 口径：逐日计算（与分时图一致），信号 bar 收盘为基准；15分钟=未来3根、30分钟=未来6根。",
+        f"> 口径：逐日计算（与分时图一致），信号后下一根开盘成交；15分钟=未来3根、30分钟=未来6根。",
         "",
         "## 策略维度（按 买点/卖点 汇总）",
         "",
