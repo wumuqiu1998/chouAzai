@@ -78,15 +78,15 @@ def build_events(df: pd.DataFrame) -> list[dict]:
     return out
 
 
-def run_portfolio(events: list[dict], max_positions: int, per_trade_cap: float) -> dict:
-    """按日期顺序执行；同日信号按类型优先级 B1>B2>B3 处理。"""
+def run_portfolio(events: list[dict], max_positions: int, per_trade_cap: float, close_map: dict[str, dict[str, float]]) -> dict:
+    """按日期顺序执行；持仓每日按当日收盘价估值（回撤真实），到期日按 sell_px 平仓。"""
     ev = sorted(events, key=lambda x: (x["buy_date"], {"buy1": 0, "buy2": 1, "buy3": 2}.get(x["type"], 3)))
     by_buy: dict[str, list] = defaultdict(list)
     for e in ev:
         by_buy[e["buy_date"]].append(e)
 
     cash = CAPITAL
-    positions: list[dict] = []  # {sell_date, sell_px, cost, shares, code, type}
+    positions: list[dict] = []  # {sell_date, sell_px, cost, shares, code, type, last_px}
     trades: list[dict] = []
     daily: list[dict] = []
     all_dates = sorted({e["buy_date"] for e in ev} | {e["sell_date"] for e in ev})
@@ -131,15 +131,20 @@ def run_portfolio(events: list[dict], max_positions: int, per_trade_cap: float) 
                     "cost": buy_px,
                     "amount": amount,
                     "shares": shares,
-                    "code": e["type"],
+                    "code": e["code"],
                     "type": e["type"],
                     "blocked": e["blocked"],
+                    "last_px": buy_px,
                 }
             )
             trades.append({"date": day, "side": "buy", "code": e["type"], "type": e["type"], "amount": round(amount, 2)})
 
-        # 3) 盯市估值
-        pos_val = sum(p["shares"] * p["sell_px"] for p in positions)
+        # 3) 盯市估值：用当日收盘价（缺失时沿用上次收盘价），到期日仍在持仓时用 sell_px 成交价
+        day_closes = close_map.get(day, {})
+        for p in positions:
+            px = day_closes.get(p["code"], p["last_px"])
+            p["last_px"] = px
+        pos_val = sum(p["shares"] * p["last_px"] for p in positions)
         equity = cash + pos_val
         daily.append({"date": day, "equity": round(equity, 2)})
 
@@ -168,6 +173,7 @@ def main() -> None:
     rng = random.Random(SEED)
     sample = rng.sample(universe, min(N, len(universe)))
     events_all: list[dict] = []
+    close_map: dict[str, dict[str, float]] = {}
     used = 0
     for s in sample:
         code = s["code"]
@@ -180,6 +186,9 @@ def main() -> None:
         df = pd.DataFrame(rows)
         df["datetime"] = pd.to_datetime(df["datetime"])
         df = df.sort_values("datetime").reset_index(drop=True)
+        for _, row in df.iterrows():
+            d = str(row["datetime"].date())
+            close_map.setdefault(d, {})[code] = float(row["close"])
         evs = build_events(df)
         for e in evs:
             e["code"] = code
@@ -200,7 +209,7 @@ def main() -> None:
     results = []
     for mp in (5, 10):
         for cap in (0.1, 0.2):
-            r = run_portfolio(events_all, mp, cap)
+            r = run_portfolio(events_all, mp, cap, close_map)
             results.append(r)
             lines.append(
                 f"| {mp} | {cap:.0%} | {r['n_trades']} | {r['win_rate'] * 100:.0f}% | {r['total_ret'] * 100:+.1f}% | {r['mdd'] * 100:.1f}% | {r['final_equity']:,.0f} | {r['blocked_sells']} |"
