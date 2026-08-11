@@ -199,3 +199,34 @@ def test_t_backtest_regime_runs():
     res_band = run_band_t_backtest(base_price=43.0, base_shares=1000, days=20, category=11, offset=800, df=df, regime=regime)
     assert all(d["regime"] == "up" for d in res_band["daily"])
     assert all(d["trend"] == "up" for d in res_band["daily"])
+
+
+def test_t_backtest_end_date_no_future_effect():
+    """追加未来数据不改变历史窗口回测结果：end_date 截断口径一致性。"""
+    rng = np.random.default_rng(23)
+    n_days = 40
+    days = pd.bdate_range("2026-01-02", periods=n_days)
+    times = ["09:30", "11:00", "13:00", "14:30"]
+    dts = pd.to_datetime([f"{d.date()} {t}" for d in days for t in times])
+    n_bars = len(dts)
+    ret = rng.normal(0.0002, 0.01, n_bars)
+    close = 43 * np.exp(np.cumsum(ret))
+    open_ = close * (1 + rng.normal(0, 0.002, n_bars))
+    open_[0] = 43.0
+    df = pd.DataFrame(
+        {
+            "datetime": dts,
+            "open": open_,
+            "high": np.maximum(open_, close) * 1.005,
+            "low": np.minimum(open_, close) * 0.995,
+            "close": close,
+            "volume": rng.integers(1e5, 1e6, n_bars),
+        }
+    )
+    end = str(days[30].date())
+    full = run_t_backtest(base_price=43.0, base_shares=1000, days=10, category=11, offset=500, df=df, end_date=end)
+    trunc = df[df["datetime"].dt.date <= pd.Timestamp(end).date()].reset_index(drop=True)
+    part = run_t_backtest(base_price=43.0, base_shares=1000, days=10, category=11, offset=500, df=trunc)
+    assert full["trades"] == part["trades"], "追加未来数据改变了历史回测交易记录"
+    assert full["daily"] == part["daily"], "追加未来数据改变了历史回测每日结果"
+    assert full["summary"]["t_pnl"] == part["summary"]["t_pnl"]

@@ -26,7 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import astock  # noqa: E402
 from quant_framework.atr import compute_atr  # noqa: E402
-from quant_framework.chan import analyze_chan  # noqa: E402
+from quant_framework.chan import analyze_chan_locked  # noqa: E402
 from quant_framework.smc import analyze_smc  # noqa: E402
 from quant_framework.wyckoff import analyze_wyckoff  # noqa: E402
 
@@ -70,7 +70,7 @@ def collect_signals(day_df: pd.DataFrame) -> list[dict]:
         "buy1": "B1", "buy2": "B2", "buy3": "B3",
         "sell1": "S1", "sell2": "S2", "sell3": "S3", "sell3_warn": "警",
     }
-    for p in analyze_chan(d)["points"]:
+    for p in analyze_chan_locked(d)["points"]:
         i = im.get(p["date"])
         label = chan_label.get(p["kind"])
         if i is None or label is None:

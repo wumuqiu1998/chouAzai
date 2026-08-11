@@ -17,7 +17,7 @@ from fastapi import APIRouter, HTTPException, Query
 import pandas as pd
 
 from quant_framework.atr import compute_atr
-from quant_framework.chan import analyze_chan
+from quant_framework.chan import analyze_chan_locked
 from quant_framework.smc import analyze_smc
 from quant_framework.wyckoff import analyze_wyckoff
 
@@ -63,7 +63,7 @@ def _intraday_signals(df: pd.DataFrame) -> list[dict]:
             out.append({"time": _time_of(s["date"]), "label": "顶", "kind": "atr_top", "price": round(s["price"], 2), "note": s["note"]})
         elif s["kind"] == "bottom":
             out.append({"time": _time_of(s["date"]), "label": "底", "kind": "atr_bottom", "price": round(s["price"], 2), "note": s["note"]})
-    for p in analyze_chan(df)["points"]:
+    for p in analyze_chan_locked(df)["points"]:
         label = _CHAN_LABEL.get(p["kind"])
         if label:
             out.append({"time": _time_of(p["date"]), "label": label, "kind": p["kind"], "price": round(p["price"], 2), "note": p["note"]})

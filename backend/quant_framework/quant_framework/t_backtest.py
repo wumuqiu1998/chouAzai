@@ -38,6 +38,7 @@ def run_t_backtest(
     enforce_limit: bool = True,
     limit_up_pct: float = 0.098,
     limit_down_pct: float = 0.098,
+    end_date: str | None = None,
 ) -> dict:
     if df is None:
         import astock
@@ -50,6 +51,8 @@ def run_t_backtest(
     df = df.sort_values("datetime").reset_index(drop=True)
 
     all_dates = list(pd.Series(df["datetime"].dt.date).unique())
+    if end_date is not None:
+        all_dates = [d for d in all_dates if str(d) <= str(end_date)]
     if len(all_dates) < days:
         raise ValueError(f"数据不足：仅 {len(all_dates)} 个交易日，需要 {days} 天")
     backtest_dates = all_dates[-days:]

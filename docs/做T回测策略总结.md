@@ -1,5 +1,9 @@
 # 做T回测策略总结
 
+> ⚠️ **结论待重验（2026-08-11）**：做T引擎本身是逐 bar 前缀计算（无未来函数，
+> 已新增 end_date 截断一致性测试），但本文的策略收益结论依赖缠论/ATR/SMC 信号源，
+> 这些信号在修正锁定口径后的有效性尚未重新验证；收益集中度等描述性结论不受影响。
+
 > 基于 `backend/quant_framework/run_t_comparison.py`（基础对比）与
 > `run_t_regime_comparison.py`（板块状态对比）的真实回测结果整理。
 > 原始数据：`data/t_comparison_report.md`、`data/regime_report.md`（均不入库）。

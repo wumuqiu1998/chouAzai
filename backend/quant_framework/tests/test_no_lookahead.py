@@ -117,6 +117,40 @@ def test_chan_locked_no_lookahead():
             assert p["known_at"] < cut, f"known_at={p['known_at']} 超出截断 {cut}"
 
 
+def test_chan_locked_no_lookahead_minute():
+    """分钟级锁定缠论同样满足截断单调性（做T/分时信号源）。"""
+    from quant_framework.chan import analyze_chan_locked
+
+    rng = np.random.default_rng(31)
+    days = pd.bdate_range("2026-03-02", periods=30)
+    times = ["09:30", "11:00", "13:00", "14:30"]
+    dts = pd.to_datetime([f"{d.date()} {t}" for d in days for t in times])
+    ret = rng.normal(0.0002, 0.012, len(dts))
+    close = 30 * np.exp(np.cumsum(ret))
+    open_ = close * (1 + rng.normal(0, 0.002, len(dts)))
+    open_[0] = 30.0
+    df = pd.DataFrame(
+        {
+            "datetime": dts,
+            "open": open_,
+            "high": np.maximum(open_, close) * 1.006,
+            "low": np.minimum(open_, close) * 0.994,
+            "close": close,
+            "volume": rng.integers(1e5, 1e6, len(dts)),
+        }
+    )
+    full = analyze_chan_locked(df)
+    full_points = {(p["kind"], p["date"]) for p in full["points"]}
+    for cut in (50, 80, 110):
+        part = analyze_chan_locked(df.iloc[:cut])
+        part_points = {(p["kind"], p["date"]) for p in part["points"]}
+        assert part_points <= full_points, (
+            f"分钟锁定缠论截断 {cut} 多出 {part_points - full_points}（未来函数）"
+        )
+        for p in part["points"]:
+            assert p["known_at"] < cut, f"known_at={p['known_at']} 超出截断 {cut}"
+
+
 def test_regime_no_lookahead():
     df = _make_df()
     daily = df.groupby(df["datetime"].dt.date).agg(
