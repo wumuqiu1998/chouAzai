@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import random
 import sys
+import json
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
@@ -25,6 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import astock  # noqa: E402
 from quant_framework.chan import analyze_chan  # noqa: E402
 from run_blind_test import fetch_universe  # noqa: E402
+import requests  # noqa: E402
 
 SEED = 20260810
 N = 50
@@ -42,14 +44,59 @@ except Exception:  # noqa: BLE001
     pass
 
 
-def build_events(df: pd.DataFrame) -> list[dict]:
-    """生成买点事件：{code, buy_date, sell_date, buy_px, sell_px, type, blocked}"""
+def fetch_sina_kline(code: str, n: int = 260, prefix: str = "") -> pd.DataFrame | None:
+    """新浪日K（腾讯WAF临时不可用时备用）。"""
+    symbol = prefix or ("sh" if code.startswith(("5", "6", "9")) else "sz") + code
+    try:
+        r = requests.get(
+            "https://quotes.sina.cn/cn/api/jsonp_v2.php/var%20data=/CN_MarketDataService.getKLineData",
+            params={"symbol": symbol, "scale": "240", "ma": "no", "datalen": str(n)},
+            headers={"User-Agent": "Mozilla/5.0", "Referer": "https://finance.sina.com.cn/"},
+            timeout=15, proxies={"http": None, "https": None},
+        )
+        txt = r.text
+        data = json.loads(txt[txt.find("(") + 1:txt.rfind(")")])
+        if not data:
+            return None
+        return pd.DataFrame(
+            [
+                {
+                    "datetime": d["day"],
+                    "open": float(d["open"]),
+                    "high": float(d["high"]),
+                    "low": float(d["low"]),
+                    "close": float(d["close"]),
+                    "volume": float(d["volume"]),
+                }
+                for d in data
+            ]
+        )
+    except Exception as e:  # noqa: BLE001
+        print(f"warn sina {code}: {e}")
+        return None
+
+
+def build_events(df: pd.DataFrame, market_ok: dict[str, bool] | None = None) -> list[dict]:
+    """生成买点事件（含缠论卖点离场信息）。
+
+    chan_sell_day/chan_sell_px：持有窗口内第一个 S1/S2/S3 的离场执行日
+    （S 点点日期 j → j+2 开盘卖出），无则 None（到期卖出）。
+    combo_sell_day/combo_sell_px/combo_reason：组合离场（缠论卖点/止损/
+    止盈/趋势破坏/到期，取最早触发者）。
+    """
     opens = df["open"].astype(float).values
     closes = df["close"].astype(float).values
     dates = df["datetime"].dt.strftime("%Y-%m-%d").values
     im = {str(pd.Timestamp(ts))[:16].replace(" 00:00", ""): i for i, ts in enumerate(df["datetime"])}
+    ma20 = pd.Series(closes).rolling(20).mean().values
     out: list[dict] = []
     chan = analyze_chan(df)
+    sell_exec: dict[str, float] = {}
+    for p in chan["points"]:
+        if p["kind"].startswith("sell") and not p["kind"].endswith("_warn"):
+            j = im.get(p["date"])
+            if j is not None and j + 2 < len(closes):
+                sell_exec[dates[j + 2]] = opens[j + 2]
     for p in chan["points"]:
         i = im.get(p["date"])
         if i is None or not p["kind"].startswith("buy") or i + 2 + HOLD >= len(closes):
@@ -64,6 +111,33 @@ def build_events(df: pd.DataFrame) -> list[dict]:
         blocked = False
         if sell / closes[i + 1 + HOLD] - 1.0 <= -LIMIT + 1e-6:
             blocked = True  # 跌停收盘卖不出，按估值
+        chan_sell_day = None
+        chan_sell_px = None
+        for k in range(i + 2, min(i + 2 + HOLD, len(dates))):
+            d = dates[k]
+            if d in sell_exec and d > dates[i + 2]:
+                chan_sell_day = d
+                chan_sell_px = sell_exec[d]
+                break
+        # 组合离场：取最早触发（同日按 stop > trend > chan > take > expire）
+        pri = {"stop": 0, "trend": 1, "chan": 2, "take": 3, "expire": 4}
+        cands: list[tuple] = []
+        if chan_sell_day:
+            cands.append((chan_sell_day, chan_sell_px, "chan"))
+        for k in range(i + 3, min(i + 2 + HOLD + 1, len(dates))):
+            d = dates[k]
+            ratio = closes[k] / buy - 1.0
+            if ratio <= -0.08:
+                cands.append((d, closes[k], "stop"))
+                break
+            if ratio >= 0.08:
+                cands.append((d, closes[k], "take"))
+                break
+            if market_ok is not None and not market_ok.get(d, True) and closes[k] < ma20[k]:
+                cands.append((d, closes[k], "trend"))
+                break
+        cands.append((dates[i + 2 + HOLD], sell, "expire"))
+        best = min(cands, key=lambda x: (x[0], pri[x[2]]))
         out.append(
             {
                 "code": p["kind"],
@@ -73,6 +147,11 @@ def build_events(df: pd.DataFrame) -> list[dict]:
                 "buy_px": buy,
                 "sell_px": sell,
                 "blocked": blocked,
+                "chan_sell_day": chan_sell_day,
+                "chan_sell_px": chan_sell_px,
+                "combo_sell_day": best[0],
+                "combo_sell_px": best[1],
+                "combo_reason": best[2],
             }
         )
     return out
@@ -149,19 +228,49 @@ def run_portfolio(
             if amount + fee > cash:
                 continue
             cash -= amount + fee
-            positions.append(
-                {
-                    "sell_date": e["sell_date"],
-                    "sell_px": e["sell_px"] * (1 - SLIPPAGE),
-                    "cost": buy_px,
-                    "amount": amount,
-                    "shares": shares,
-                    "code": e["code"],
-                    "type": e["type"],
-                    "blocked": e["blocked"],
-                    "last_px": buy_px,
-                }
-            )
+            if exit_rule in ("combo", "combo+mkt") and e.get("combo_sell_day"):
+                positions.append(
+                    {
+                        "sell_date": e["combo_sell_day"],
+                        "sell_px": e["combo_sell_px"] * (1 - SLIPPAGE),
+                        "cost": buy_px,
+                        "amount": amount,
+                        "shares": shares,
+                        "code": e["code"],
+                        "type": e["type"],
+                        "blocked": False,
+                        "last_px": buy_px,
+                        "reason": e.get("combo_reason"),
+                    }
+                )
+            elif exit_rule in ("chan", "chan+mkt") and e.get("chan_sell_day"):
+                positions.append(
+                    {
+                        "sell_date": e["chan_sell_day"],
+                        "sell_px": e["chan_sell_px"] * (1 - SLIPPAGE),
+                        "cost": buy_px,
+                        "amount": amount,
+                        "shares": shares,
+                        "code": e["code"],
+                        "type": e["type"],
+                        "blocked": False,
+                        "last_px": buy_px,
+                    }
+                )
+            else:
+                positions.append(
+                    {
+                        "sell_date": e["sell_date"],
+                        "sell_px": e["sell_px"] * (1 - SLIPPAGE),
+                        "cost": buy_px,
+                        "amount": amount,
+                        "shares": shares,
+                        "code": e["code"],
+                        "type": e["type"],
+                        "blocked": e["blocked"],
+                        "last_px": buy_px,
+                    }
+                )
             trades.append({"date": day, "side": "buy", "code": e["type"], "type": e["type"], "amount": round(amount, 2)})
 
         # 3) 盯市估值：用当日收盘价（缺失时沿用上次收盘价）
@@ -202,8 +311,7 @@ def main() -> None:
     # 大盘过滤：上证指数收盘 > MA20（用前一日数据判断，T-1 生效，无未来函数）
     market_ok: dict[str, bool] | None = None
     try:
-        idx = astock.index_kline("sh000001", offset=300)
-        idf = pd.DataFrame(idx)
+        idf = fetch_sina_kline("000001", 300, prefix="sh000001")
         idf["datetime"] = pd.to_datetime(idf["datetime"])
         idf = idf.sort_values("datetime").reset_index(drop=True)
         idf["ma20"] = idf["close"].rolling(20).mean()
@@ -214,19 +322,17 @@ def main() -> None:
         print(f"[warn] 大盘过滤不可用：{e}", flush=True)
     for s in sample:
         code = s["code"]
-        try:
-            rows = astock.kline(code, category=4, offset=260)
-        except Exception:  # noqa: BLE001
+        df = fetch_sina_kline(code, 260)
+        if df is None:
             continue
-        if len(rows) < 250:
+        if len(df) < 250:
             continue
-        df = pd.DataFrame(rows)
         df["datetime"] = pd.to_datetime(df["datetime"])
         df = df.sort_values("datetime").reset_index(drop=True)
         for _, row in df.iterrows():
             d = str(row["datetime"].date())
             close_map.setdefault(d, {})[code] = float(row["close"])
-        evs = build_events(df)
+        evs = build_events(df, market_ok)
         for e in evs:
             e["code"] = code
         events_all.extend(evs)
@@ -244,12 +350,12 @@ def main() -> None:
         "|---|---|---|---|---|---|---|---|---|",
     ]
     results = []
-    for rule in ("fixed", "both", "stop", "take", "both+mkt"):
+    for rule in ("fixed", "both", "chan", "combo", "combo+mkt", "both+mkt"):
         for mp, cap in ((5, 0.1), (5, 0.2), (10, 0.1), (10, 0.2)):
             r = run_portfolio(
                 events_all, mp, cap, close_map,
-                exit_rule="both" if rule == "both+mkt" else rule,
-                market_ok=market_ok if rule == "both+mkt" else None,
+                exit_rule="both" if rule == "both+mkt" else ("chan" if rule == "chan+mkt" else ("combo" if rule == "combo+mkt" else rule)),
+                market_ok=market_ok if rule in ("both+mkt", "chan+mkt", "combo+mkt") else None,
             )
             results.append(r)
             lines.append(
@@ -258,8 +364,14 @@ def main() -> None:
 
     best = max(results, key=lambda x: x["total_ret"])
     lines += ["", "## 结论", ""]
-    lines.append(f"- 固定持有 vs 动态退出：对比止损-8%/止盈+8%/两者组合，看回撤与收益变化。")
-    lines.append("- 若动态退出显著改善回撤且不伤收益，固定持有口径确实高估/低估了真实可交易性。")
+    lines.append("- 对比：固定持有 / 止损止盈 / 仅缠论卖点 / 组合离场（卖点+止损+止盈+趋势破坏+到期）/ 组合离场+大盘过滤。")
+    lines.append("- 组合离场若在收益接近时显著降低回撤，说明卖出端组合策略有效。")
+    lines += ["", "## 组合离场原因分布（事件预计算）", "", "| 离场原因 | 事件数 | 占比 |", "|---|---|---|"]
+    from collections import Counter
+    reasons = Counter(e.get("combo_reason", "expire") for e in events_all)
+    for k in ("stop", "trend", "chan", "take", "expire"):
+        n = reasons.get(k, 0)
+        lines.append(f"| {k} | {n} | {n / max(1, len(events_all)) * 100:.0f}% |")
     OUT.write_text("\n".join(lines), encoding="utf-8")
     print(f"\n报告已生成：{OUT}")
 
