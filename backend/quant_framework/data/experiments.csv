@@ -157,3 +157,15 @@ FORECAST-利好,业绩预告事件后行业中性CAR全市场复测,"group=利�
 FORECAST-利空,业绩预告利空后行业中性CAR全市场复测,"group=利空, n=4762, event=notice+1",利空组相对伪事件有正增量才算事件效应,"CAR(1,20)=+1.77%，t=+9.32",,正比例 51%,False,单一年窗口/披露时点按次日保守对齐/不复权,10eea56,2026-08-11T14:28:37
 FORECAST-不确定,业绩预告事件后行业中性CAR全市场复测,"group=不确定, n=40, event=notice+1",利空组相对伪事件有正增量才算事件效应,"CAR(1,20)=-3.60%，t=-1.29",,正比例 40%,False,单一年窗口/披露时点按次日保守对齐/不复权,10eea56,2026-08-11T14:28:37
 FORECAST-伪事件,业绩预告事件后行业中性CAR全市场复测,"group=伪事件, n=42965, event=notice+1",利空组相对伪事件有正增量才算事件效应,"CAR(1,20)=+1.44%，t=+20.04",,正比例 51%,False,单一年窗口/披露时点按次日保守对齐/不复权,10eea56,2026-08-11T14:28:37
+VP-close_loc5-fwd5,量价因子 5日收盘位置 对fwd5收益的预测力,"factor=close_loc5, horizon=fwd5",|IC|>0.03,IC=-0.39% IR=-0.03 多空 +0.05%,,,False,缓存股票池有选择偏差/单一年窗口,d892985,2026-08-11T15:21:49
+VP-close_loc5-fwd10,量价因子 5日收盘位置 对fwd10收益的预测力,"factor=close_loc5, horizon=fwd10",|IC|>0.03,IC=-0.43% IR=-0.04 多空 +0.18%,,,False,缓存股票池有选择偏差/单一年窗口,d892985,2026-08-11T15:21:49
+VP-close_loc5-fwd20,量价因子 5日收盘位置 对fwd20收益的预测力,"factor=close_loc5, horizon=fwd20",|IC|>0.03,IC=-1.26% IR=-0.11 多空 -0.05%,,,False,缓存股票池有选择偏差/单一年窗口,d892985,2026-08-11T15:21:49
+VP-vol_ratio5-fwd5,量价因子 5日量比 对fwd5收益的预测力,"factor=vol_ratio5, horizon=fwd5",|IC|>0.03,IC=-3.25% IR=-0.39 多空 -0.09%,,,False,缓存股票池有选择偏差/单一年窗口,d892985,2026-08-11T15:21:49
+VP-vol_ratio5-fwd10,量价因子 5日量比 对fwd10收益的预测力,"factor=vol_ratio5, horizon=fwd10",|IC|>0.03,IC=-2.77% IR=-0.39 多空 -0.01%,,,False,缓存股票池有选择偏差/单一年窗口,d892985,2026-08-11T15:21:49
+VP-vol_ratio5-fwd20,量价因子 5日量比 对fwd20收益的预测力,"factor=vol_ratio5, horizon=fwd20",|IC|>0.03,IC=-2.61% IR=-0.33 多空 +0.11%,,,False,缓存股票池有选择偏差/单一年窗口,d892985,2026-08-11T15:21:49
+VP-up_down_vol5-fwd5,量价因子 涨跌量比5 对fwd5收益的预测力,"factor=up_down_vol5, horizon=fwd5",|IC|>0.03,IC=-2.72% IR=-0.40 多空 -0.10%,,,False,缓存股票池有选择偏差/单一年窗口,d892985,2026-08-11T15:21:49
+VP-up_down_vol5-fwd10,量价因子 涨跌量比5 对fwd10收益的预测力,"factor=up_down_vol5, horizon=fwd10",|IC|>0.03,IC=-2.43% IR=-0.34 多空 -0.07%,,,False,缓存股票池有选择偏差/单一年窗口,d892985,2026-08-11T15:21:49
+VP-up_down_vol5-fwd20,量价因子 涨跌量比5 对fwd20收益的预测力,"factor=up_down_vol5, horizon=fwd20",|IC|>0.03,IC=-1.38% IR=-0.27 多空 +0.48%,,,False,缓存股票池有选择偏差/单一年窗口,d892985,2026-08-11T15:21:49
+VP-obv_chg20-fwd5,量价因子 OBV斜率20 对fwd5收益的预测力,"factor=obv_chg20, horizon=fwd5",|IC|>0.03,IC=-2.92% IR=-0.26 多空 +0.07%,,,False,缓存股票池有选择偏差/单一年窗口,d892985,2026-08-11T15:21:49
+VP-obv_chg20-fwd10,量价因子 OBV斜率20 对fwd10收益的预测力,"factor=obv_chg20, horizon=fwd10",|IC|>0.03,IC=-3.68% IR=-0.32 多空 +0.18%,,,False,缓存股票池有选择偏差/单一年窗口,d892985,2026-08-11T15:21:49
+VP-obv_chg20-fwd20,量价因子 OBV斜率20 对fwd20收益的预测力,"factor=obv_chg20, horizon=fwd20",|IC|>0.03,IC=-4.41% IR=-0.36 多空 +0.19%,,,False,缓存股票池有选择偏差/单一年窗口,d892985,2026-08-11T15:21:49
