@@ -205,7 +205,7 @@ def run_portfolio(
                 fee = gross * (COMMISSION + STAMP + SLIPPAGE)
                 cash += gross - fee
                 net = (sell_px / pos["cost"] - 1.0) * pos["amount"]
-                trades.append({"date": day, "code": pos["code"], "type": pos["type"], "net": round(net, 2), "blocked": pos.get("blocked", False)})
+                trades.append({"date": day, "code": pos["code"], "type": pos["type"], "net": round(net, 2), "ret": round(sell_px / pos["cost"] - 1.0, 4), "blocked": pos.get("blocked", False)})
             else:
                 remaining.append(pos)
         positions = remaining
@@ -297,6 +297,7 @@ def run_portfolio(
         "blocked_sells": sum(1 for t in closed if t.get("blocked")),
         "daily": daily,
         "period_days": len(daily),
+        "trades": trades,
     }
 
 
