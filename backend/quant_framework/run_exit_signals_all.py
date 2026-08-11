@@ -150,6 +150,16 @@ def main() -> None:
     universe = fetch_universe()
     rng = random.Random(SEED)
     sample = rng.sample(universe, min(N, len(universe)))
+    market_ok: dict[str, bool] | None = None
+    try:
+        idf = fetch_sina_kline("000001", 300, prefix="sh000001")
+        idf["datetime"] = pd.to_datetime(idf["datetime"])
+        idf = idf.sort_values("datetime").reset_index(drop=True)
+        idf["ma20"] = idf["close"].rolling(20).mean()
+        idf["ok"] = (idf["close"].shift(1) > idf["ma20"].shift(1)).fillna(True)
+        market_ok = {str(row["datetime"].date()): bool(row["ok"]) for _, row in idf.iterrows()}
+    except Exception as e:  # noqa: BLE001
+        print("warn 指数", e)
     events: list[dict] = []
     close_map: dict[str, dict[str, float]] = {}
 
@@ -209,6 +219,11 @@ def main() -> None:
         "|---|---|---|---|---|---|---|---|",
     ]
     signals = ("chan", "warn", "atr_top", "overheat", "upthrust", "sweep", "break", "choch", "vol_div", "ma20", "trail5", "trail8", "trail12", "divergence")
+    combos = {
+        "combo_top4": ("divergence", "overheat", "warn", "trail12"),
+        "combo_top5": ("divergence", "overheat", "warn", "trail12", "sweep"),
+        "combo_top5_mkt": ("divergence", "overheat", "warn", "trail12", "sweep"),
+    }
     for sig in signals:
         for mp, cap in ((5, 0.1), (10, 0.2)):
             evs_round = []
@@ -239,8 +254,44 @@ def main() -> None:
                     code_version=subprocess.run(["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True).stdout.strip() or "dev",
                 )
             )
+    for cname, c_sigs in combos.items():
+        for mp, cap in ((5, 0.1), (10, 0.2)):
+            evs_round = []
+            trig = 0
+            for e in events:
+                cands = [(e["exits"][s][0], e["exits"][s][1]) for s in c_sigs if s in e["exits"]]
+                if cands:
+                    ex = min(cands, key=lambda x: x[0])
+                    trig += 1
+                else:
+                    ex = e["fallback"]
+                evs_round.append({**e, "sell_date": ex[0], "sell_px": ex[1]})
+            r = run_portfolio(
+                evs_round, mp, cap, close_map, exit_rule="fixed",
+                market_ok=market_ok if cname.endswith("_mkt") else None,
+            )
+            nets = [t["ret"] for t in r["trades"] if t.get("ret") is not None]
+            avg_net = float(np.mean(nets)) if nets else 0.0
+            lines.append(
+                f"| {cname} | {mp}/{cap:.0%} | {r['n_trades']} | {trig / max(1, len(events)) * 100:.0f}% | "
+                f"{avg_net * 100:+.2f}% | {r['win_rate'] * 100:.0f}% | {r['total_ret'] * 100:+.1f}% | {r['mdd'] * 100:.1f}% |"
+            )
+            log.append(
+                ExperimentRecord(
+                    experiment_id=f"EXITALL-{cname.upper()}-{mp}-{int(cap * 100)}",
+                    hypothesis=f"组合卖出信号：{cname}（最早触发离场）",
+                    unique_change=f"exit_combo={cname}, max_positions={mp}, cap={cap}",
+                    expected="组合信号在保住单笔收益的同时降低回撤",
+                    dev_result=f"触发率 {trig / max(1, len(events)) * 100:.0f}%，单笔均值 {avg_net * 100:+.2f}%，胜率 {r['win_rate'] * 100:.0f}%",
+                    val_result="",
+                    cost_result=f"总收益 {r['total_ret'] * 100:+.1f}%，回撤 {r['mdd'] * 100:.1f}%",
+                    passed=False,
+                    failure_reason="一年窗口/单一样本池，未做样本外与盲测",
+                    code_version=subprocess.run(["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True).stdout.strip() or "dev",
+                )
+            )
     lines += ["", "## 结论", ""]
-    lines.append("- 对比触发率/单笔均值/胜率/总收益/回撤，筛选最有效卖出信号。")
+    lines.append("- 对比触发率/单笔均值/胜率/总收益/回撤，组合信号是否优于单信号。")
     OUT.write_text("\n".join(lines), encoding="utf-8")
     print(f"\n报告已生成：{OUT}，日志追加 {len(signals) * 2} 条")
 
