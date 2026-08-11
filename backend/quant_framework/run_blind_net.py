@@ -20,7 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import astock  # noqa: E402
-from quant_framework.chan import analyze_chan  # noqa: E402
+from quant_framework.chan import analyze_chan_locked  # noqa: E402
 from run_blind_test import fetch_universe  # noqa: E402
 
 SEED = 20260810
@@ -69,22 +69,25 @@ def main() -> None:
         used += 1
 
         sig_i: set[int] = set()
-        chan = analyze_chan(df)
+        chan = analyze_chan_locked(df)
         im = {str(pd.Timestamp(ts))[:16].replace(" 00:00", ""): i for i, ts in enumerate(df["datetime"])}
         for p in chan["points"]:
-            i = im.get(p["date"])
-            if i is None or not p["kind"].startswith("buy") or i + 7 >= len(closes):
+            j = im.get(p["date"])
+            if j is None or not p["kind"].startswith("buy"):
                 continue
-            sig_i.add(i)
-            prev = closes[i + 1]
+            b = max(j + 2, p.get("known_at", j) + 1)
+            if b + 5 >= len(closes):
+                continue
+            sig_i.add(b)
+            prev = closes[b - 1]
             if prev <= 0:
                 continue
-            buy = opens[i + 2]
+            buy = opens[b]
             if buy / prev - 1.0 >= LIMIT - 1e-6:
                 blocked += 1
                 continue
-            sell = closes[i + 7]
-            if sell / closes[i + 6] - 1.0 <= -LIMIT + 1e-6:
+            sell = closes[b + 5]
+            if sell / closes[b + 4] - 1.0 <= -LIMIT + 1e-6:
                 blocked += 1
                 continue
             if buy <= 0:
@@ -92,7 +95,7 @@ def main() -> None:
             sig_nets.append(net_of(buy, sell))
 
         for i in range(len(closes) - 7):
-            if i in sig_i or i + 1 in sig_i or i + 2 in sig_i:
+            if any((i + d) in sig_i for d in (-2, -1, 0, 1, 2)):
                 continue
             prev = closes[i + 1]
             if prev <= 0:

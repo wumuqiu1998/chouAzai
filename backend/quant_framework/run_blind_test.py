@@ -26,7 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import astock  # noqa: E402
 from quant_framework.atr import compute_atr  # noqa: E402
-from quant_framework.chan import analyze_chan  # noqa: E402
+from quant_framework.chan import analyze_chan_locked  # noqa: E402
 from quant_framework.smc import analyze_smc  # noqa: E402
 
 SEED = 20260810
@@ -80,12 +80,13 @@ def collect_signals(df: pd.DataFrame) -> list[dict]:
         if i is not None:
             out.append({"i": i, "strategy": "ATR", "label": "顶" if s["kind"] == "top" else "底", "side": "sell" if s["kind"] == "top" else "buy", "exec_offset": 1})
     label_map = {"buy1": "B1", "buy2": "B2", "buy3": "B3", "sell1": "S1", "sell2": "S2", "sell3": "S3", "sell3_warn": "警"}
-    for p in analyze_chan(df)["points"]:
-        i = im.get(p["date"])
+    for p in analyze_chan_locked(df)["points"]:
+        j = im.get(p["date"])
         label = label_map.get(p["kind"])
-        if i is None or label is None:
+        if j is None or label is None:
             continue
-        out.append({"i": i, "strategy": "缠论", "label": label, "side": "sell" if p["kind"].startswith("sell") else "buy", "exec_offset": 2})
+        b = max(j + 2, p.get("known_at", j) + 1)
+        out.append({"i": b, "strategy": "缠论", "label": label, "side": "sell" if p["kind"].startswith("sell") else "buy", "exec_offset": 0})
     smc = analyze_smc(df, sweep_min_gap=15)
     for s in smc.get("sweeps") or []:
         i = im.get(s["date"])

@@ -40,6 +40,25 @@ def _key_of(dt) -> str:
     return str(pd.Timestamp(dt))[:16]
 
 
+def _make_daily_df(n: int = 260, seed: int = 11) -> pd.DataFrame:
+    rng = np.random.default_rng(seed)
+    dates = pd.bdate_range("2024-01-02", periods=n)
+    ret = rng.normal(0.0002, 0.015, n)
+    close = 30 * np.exp(np.cumsum(ret))
+    open_ = close * (1 + rng.normal(0, 0.0015, n))
+    open_[0] = 30.0
+    return pd.DataFrame(
+        {
+            "datetime": pd.to_datetime(dates),
+            "open": open_,
+            "high": np.maximum(open_, close) * 1.008,
+            "low": np.minimum(open_, close) * 0.992,
+            "close": close,
+            "volume": rng.integers(5e5, 8e6, n),
+        }
+    )
+
+
 def test_atr_no_lookahead():
     df = _make_df()
     full = compute_atr(df)
@@ -81,6 +100,23 @@ def test_chan_no_lookahead():
                 )
 
 
+def test_chan_locked_no_lookahead():
+    """锁定版缠论：历史点只增不减（截断 ⊆ 全量），known_at 必须在窗口内。"""
+    from quant_framework.chan import analyze_chan_locked
+
+    df = _make_daily_df()
+    full = analyze_chan_locked(df)
+    full_points = {(p["kind"], p["date"]) for p in full["points"]}
+    for cut in (80, 120, 200, 240):
+        part = analyze_chan_locked(df.iloc[:cut])
+        part_points = {(p["kind"], p["date"]) for p in part["points"]}
+        assert part_points <= full_points, (
+            f"锁定缠论截断 {cut} 多出 {part_points - full_points}（未来函数）"
+        )
+        for p in part["points"]:
+            assert p["known_at"] < cut, f"known_at={p['known_at']} 超出截断 {cut}"
+
+
 def test_regime_no_lookahead():
     df = _make_df()
     daily = df.groupby(df["datetime"].dt.date).agg(
@@ -93,3 +129,54 @@ def test_regime_no_lookahead():
         assert common, "无共同日期"
         for d in common:
             assert full[d] == part[d], f"板块状态在 {d} 不一致：全量 {full[d]} vs 截断 {part[d]}"
+
+
+def test_exit_signal_maps_no_lookahead():
+    """卖出信号映射表：截断计算结果必须 ⊆ 全量结果，且机械类信号（MA20/
+    新高缩量/顶背离）在截断范围内必须与全量一致。"""
+    from run_exit_signals_all import build_signal_maps
+
+    df = _make_daily_df()
+    full = build_signal_maps(df)
+    idx = {str(pd.Timestamp(ts))[:16]: i for i, ts in enumerate(df["datetime"])}
+    for cut in (80, 120, 200, 240):
+        part = build_signal_maps(df.iloc[:cut])
+        for sig, pmap in part.items():
+            for d, px in pmap.items():
+                assert d in full[sig], f"{sig}@{d} 截断有、全量无（疑似未来函数）"
+                assert abs(float(px) - float(full[sig][d])) < 1e-9, (
+                    f"{sig}@{d} 价格不一致：全量 {full[sig][d]} vs 截断 {px}"
+                )
+        for sig in ("ma20", "vol_div", "divergence"):
+            for d, px in full[sig].items():
+                i = idx.get(d)
+                if i is not None and i < cut - 5:
+                    assert d in part[sig], (
+                        f"{sig}@{d} 全量有、截断{cut}无（疑似未来函数）"
+                    )
+
+
+def test_trailing_exit_no_lookahead():
+    """移动止损（收盘触发与盘中触发两种口径）：截断后只要包含触发日，
+    结果必须与全量一致；截断在触发日之前必须无信号。"""
+    from run_exit_signals_all import trailing_exit
+
+    df = _make_daily_df()
+    closes = df["close"].astype(float).values
+    lows = df["low"].astype(float).values
+    dates = df["datetime"].dt.strftime("%Y-%m-%d").values
+    buy_idx = 100
+    for pct in (0.05, 0.08, 0.12):
+        full_exit = trailing_exit(closes, dates, buy_idx, pct)
+        full_low = trailing_exit(closes, dates, buy_idx, pct, lows=lows)
+        for cut in range(buy_idx + 4, len(df) + 1, 17):
+            part = trailing_exit(closes[:cut], dates[:cut], buy_idx, pct)
+            part_low = trailing_exit(closes[:cut], dates[:cut], buy_idx, pct, lows=lows[:cut])
+            if full_exit is not None and int(np.where(dates == full_exit[0])[0][0]) < cut:
+                assert part == full_exit, f"收盘触发 pct={pct} 截断{cut}不一致：{part} vs {full_exit}"
+            else:
+                assert part is None, f"收盘触发 pct={pct} 截断{cut}提前出现信号：{part}"
+            if full_low is not None and int(np.where(dates == full_low[0])[0][0]) < cut:
+                assert part_low == full_low, f"盘中触发 pct={pct} 截断{cut}不一致：{part_low} vs {full_low}"
+            else:
+                assert part_low is None, f"盘中触发 pct={pct} 截断{cut}提前出现信号：{part_low}"

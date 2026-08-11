@@ -24,7 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import astock  # noqa: E402
-from quant_framework.chan import analyze_chan  # noqa: E402
+from quant_framework.chan import analyze_chan_locked  # noqa: E402
 from run_blind_test import fetch_universe  # noqa: E402
 import requests  # noqa: E402
 
@@ -90,32 +90,37 @@ def build_events(df: pd.DataFrame, market_ok: dict[str, bool] | None = None) -> 
     im = {str(pd.Timestamp(ts))[:16].replace(" 00:00", ""): i for i, ts in enumerate(df["datetime"])}
     ma20 = pd.Series(closes).rolling(20).mean().values
     out: list[dict] = []
-    chan = analyze_chan(df)
+    chan = analyze_chan_locked(df)
     sell_exec: dict[str, float] = {}
     for p in chan["points"]:
         if p["kind"].startswith("sell") and not p["kind"].endswith("_warn"):
             j = im.get(p["date"])
-            if j is not None and j + 2 < len(closes):
-                sell_exec[dates[j + 2]] = opens[j + 2]
+            if j is not None:
+                k = max(j + 2, p.get("known_at", j) + 1)
+                if k < len(closes):
+                    sell_exec[dates[k]] = opens[k]
     for p in chan["points"]:
-        i = im.get(p["date"])
-        if i is None or not p["kind"].startswith("buy") or i + 2 + HOLD >= len(closes):
+        j = im.get(p["date"])
+        if j is None or not p["kind"].startswith("buy"):
             continue
-        prev = closes[i + 1]
-        buy = opens[i + 2]
+        b = max(j + 2, p.get("known_at", j) + 1)
+        if b + HOLD >= len(closes):
+            continue
+        prev = closes[b - 1]
+        buy = opens[b]
         if prev <= 0 or buy <= 0:
             continue
         if buy / prev - 1.0 >= LIMIT - 1e-6:
             continue  # 涨停开盘买不进
-        sell = closes[i + 2 + HOLD]
+        sell = closes[b + HOLD]
         blocked = False
-        if sell / closes[i + 1 + HOLD] - 1.0 <= -LIMIT + 1e-6:
+        if sell / closes[b + HOLD - 1] - 1.0 <= -LIMIT + 1e-6:
             blocked = True  # 跌停收盘卖不出，按估值
         chan_sell_day = None
         chan_sell_px = None
-        for k in range(i + 2, min(i + 2 + HOLD, len(dates))):
+        for k in range(b + 1, min(b + HOLD, len(dates))):
             d = dates[k]
-            if d in sell_exec and d > dates[i + 2]:
+            if d in sell_exec and d > dates[b]:
                 chan_sell_day = d
                 chan_sell_px = sell_exec[d]
                 break
@@ -124,7 +129,7 @@ def build_events(df: pd.DataFrame, market_ok: dict[str, bool] | None = None) -> 
         cands: list[tuple] = []
         if chan_sell_day:
             cands.append((chan_sell_day, chan_sell_px, "chan"))
-        for k in range(i + 3, min(i + 2 + HOLD + 1, len(dates))):
+        for k in range(b + 2, min(b + HOLD + 1, len(dates))):
             d = dates[k]
             ratio = closes[k] / buy - 1.0
             if ratio <= -0.08:
@@ -136,14 +141,14 @@ def build_events(df: pd.DataFrame, market_ok: dict[str, bool] | None = None) -> 
             if market_ok is not None and not market_ok.get(d, True) and closes[k] < ma20[k]:
                 cands.append((d, closes[k], "trend"))
                 break
-        cands.append((dates[i + 2 + HOLD], sell, "expire"))
+        cands.append((dates[b + HOLD], sell, "expire"))
         best = min(cands, key=lambda x: (x[0], pri[x[2]]))
         out.append(
             {
                 "code": p["kind"],
                 "type": p["kind"],
-                "buy_date": dates[i + 2],
-                "sell_date": dates[i + 2 + HOLD],
+                "buy_date": dates[b],
+                "sell_date": dates[b + HOLD],
                 "buy_px": buy,
                 "sell_px": sell,
                 "blocked": blocked,

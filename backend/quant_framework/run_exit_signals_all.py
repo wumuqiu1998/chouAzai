@@ -34,7 +34,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from quant_framework.atr import compute_atr  # noqa: E402
-from quant_framework.chan import analyze_chan  # noqa: E402
+from quant_framework.chan import analyze_chan, analyze_chan_locked  # noqa: E402
 from quant_framework.experiments import ExperimentLog  # noqa: E402
 from quant_framework.models import ExperimentRecord  # noqa: E402
 from quant_framework.smc import analyze_smc  # noqa: E402
@@ -65,15 +65,20 @@ def build_signal_maps(df: pd.DataFrame) -> dict[str, dict[str, float]]:
         "chan", "warn", "atr_top", "overheat", "upthrust", "sweep", "break", "choch", "vol_div", "ma20", "trail5", "trail8", "trail12", "divergence",
     )}
 
-    chan = analyze_chan(df)
+    chan = analyze_chan_locked(df)
     for p in chan["points"]:
         j = im.get(p["date"])
         if j is None:
             continue
-        if p["kind"] in ("sell1", "sell2", "sell3") and j + 2 < len(closes):
-            maps["chan"][dates[j + 2]] = opens[j + 2]
-        elif p["kind"] == "sell3_warn" and j + 1 < len(closes):
-            maps["warn"][dates[j + 1]] = opens[j + 1]
+        known = p.get("known_at", j)
+        if p["kind"] in ("sell1", "sell2", "sell3"):
+            k = max(j + 2, known + 1)
+            if k < len(closes):
+                maps["chan"][dates[k]] = opens[k]
+        elif p["kind"] == "sell3_warn":
+            k = max(j + 1, known + 1)
+            if k < len(closes):
+                maps["warn"][dates[k]] = opens[k]
 
     for s in compute_atr(df)["signals"]:
         t = im.get(s["date"])
@@ -95,13 +100,16 @@ def build_signal_maps(df: pd.DataFrame) -> dict[str, dict[str, float]]:
         if j is not None and j + 1 < len(closes) and s["kind"] == "bearish":
             maps["sweep"][dates[j + 1]] = opens[j + 1]
     st = smc.get("structure") or {}
-    for key, target in (("last_bos", "break"), ("last_choch", "choch")):
-        item = st.get(key)
-        if not item:
-            continue
+    # 只用逐事件结构输出（每个 BOS/CHoCH 事件在对应摆动点确认后即确定）；
+    # 不再用 last_bos/last_choch（只含"最后一个"，依赖未来数据，截断不一致）
+    for item in st.get("events") or []:
         j = im.get(item["date"])
-        if j is not None and j + 3 < len(closes) and (key != "last_bos" or item["kind"] == "bearish"):
-            maps[target][dates[j + 3]] = opens[j + 3]
+        if j is None or j + 3 >= len(closes):
+            continue
+        if item.get("type") == "bos" and item["kind"] == "bearish":
+            maps["break"][dates[j + 3]] = opens[j + 3]
+        elif item.get("type") == "choch":
+            maps["choch"][dates[j + 3]] = opens[j + 3]
 
     ma20 = pd.Series(closes).rolling(20).mean().values
     for k in range(21, len(closes) - 1):
@@ -135,13 +143,32 @@ def first_exit(signal_map: dict[str, float], dates: list[str], buy_idx: int, max
     return None
 
 
-def trailing_exit(closes: np.ndarray, dates: list[str], buy_idx: int, pct: float, max_hold: int = MAX_HOLD) -> tuple[str, float] | None:
+def trailing_exit(
+    closes: np.ndarray,
+    dates: list[str],
+    buy_idx: int,
+    pct: float,
+    max_hold: int = MAX_HOLD,
+    lows: np.ndarray | None = None,
+) -> tuple[str, float] | None:
+    """移动止损。
+
+    lows=None（默认）：收盘触发——run_high 含当日收盘，触发日收盘成交（原口径）；
+    lows 给定：盘中触发——run_high 取买入确认日至前一日的最高收盘价，
+    low 击穿 run_high*(1-pct) 即触发，触发日收盘成交（更贴近真实的保守口径）。
+    """
     buy_day = dates[buy_idx + 2]
     run_high = closes[buy_idx + 1]
     for k in range(buy_idx + 2, min(buy_idx + 2 + max_hold + 1, len(closes))):
-        run_high = max(run_high, closes[k])
-        if closes[k] <= run_high * (1 - pct):
-            return dates[k], closes[k]
+        if lows is not None:
+            if k > buy_idx + 2:
+                run_high = max(run_high, closes[k - 1])
+            if lows[k] <= run_high * (1 - pct):
+                return dates[k], closes[k]
+        else:
+            run_high = max(run_high, closes[k])
+            if closes[k] <= run_high * (1 - pct):
+                return dates[k], closes[k]
     return None
 
 
@@ -178,32 +205,37 @@ def main() -> None:
             close_map.setdefault(d, {})[code] = float(row["close"])
         maps = build_signal_maps(df)
         im = {str(pd.Timestamp(ts))[:16].replace(" 00:00", ""): i for i, ts in enumerate(df["datetime"])}
-        for p in analyze_chan(df)["points"]:
-            i = im.get(p["date"])
-            if i is None or not p["kind"].startswith("buy") or i + 7 >= len(closes):
+        for p in analyze_chan_locked(df)["points"]:
+            j = im.get(p["date"])
+            if j is None or not p["kind"].startswith("buy"):
                 continue
-            prev = closes[i + 1]
-            buy = opens[i + 2]
+            known = p.get("known_at", j)
+            b = max(j + 2, known + 1)  # 该买点第一次可见后再执行
+            if b + 5 >= len(closes):
+                continue
+            prev = closes[b - 1]
+            buy = opens[b]
             if prev <= 0 or buy <= 0 or buy / prev - 1.0 >= 0.098:
                 continue
+            i_synth = b - 2  # 供 first_exit/trailing_exit 复用"点索引"语义
             e: dict = {
                 "code": code,
                 "type": p["kind"],
-                "buy_date": dates[i + 2],
+                "buy_date": dates[b],
                 "buy_px": buy,
                 "blocked": False,
                 "exits": {},
             }
             for sig in ("chan", "warn", "atr_top", "overheat", "upthrust", "sweep", "break", "choch", "vol_div", "ma20", "divergence"):
-                ex = first_exit(maps[sig], dates, i)
+                ex = first_exit(maps[sig], dates, i_synth)
                 if ex:
                     e["exits"][sig] = ex
             for pct, key in ((0.05, "trail5"), (0.08, "trail8"), (0.12, "trail12")):
-                ex = trailing_exit(closes, dates, i, pct)
+                ex = trailing_exit(closes, dates, i_synth, pct)
                 if ex:
                     e["exits"][key] = ex
             # 兜底：max_hold 日强平
-            fallback_k = min(i + 2 + MAX_HOLD, len(closes) - 1)
+            fallback_k = min(b + MAX_HOLD, len(closes) - 1)
             e["fallback"] = (dates[fallback_k], closes[fallback_k])
             events.append(e)
         print(f"{code} done", flush=True)

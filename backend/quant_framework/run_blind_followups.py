@@ -20,7 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import astock  # noqa: E402
-from quant_framework.chan import analyze_chan  # noqa: E402
+from quant_framework.chan import analyze_chan_locked  # noqa: E402
 from run_blind_test import fetch_universe  # noqa: E402
 
 SEED = 20260810
@@ -56,11 +56,13 @@ def chan_buy_points(df: pd.DataFrame) -> list[dict]:
     closes = df["close"].astype(float).values
     im = {str(pd.Timestamp(ts))[:16].replace(" 00:00", ""): i for i, ts in enumerate(df["datetime"])}
     out = []
-    for p in analyze_chan(df)["points"]:
-        i = im.get(p["date"])
-        if i is None or not p["kind"].startswith("buy"):
+    for p in analyze_chan_locked(df)["points"]:
+        j = im.get(p["date"])
+        if j is None or not p["kind"].startswith("buy"):
             continue
-        out.append({"i": i, "kind": p["kind"]})
+        b = max(j + 2, p.get("known_at", j) + 1)
+        if b + 5 < len(closes):
+            out.append({"i": b, "kind": p["kind"]})
     return out
 
 

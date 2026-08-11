@@ -123,33 +123,44 @@ def analyze_smc(
             dedup.append(g)
     ob = dedup[-lookback:]
 
-    # 3) 流动性扫荡：突破最近 swing high/low 后收盘收回
+    # 3) 流动性扫荡：突破"截至当日已确认"的最近 swing high/low 后收盘收回
     swings = _swings(d, swing_left, swing_right)
     sweeps: list[dict] = []
-    recent_high = next((s for s in reversed(swings) if s["kind"] == "high"), None)
-    recent_low = next((s for s in reversed(swings) if s["kind"] == "low"), None)
-    for i in range(swing_left + swing_right, len(d)):
-        if recent_high and high.iloc[i] > recent_high["price"] and close.iloc[i] < recent_high["price"]:
+    swing_ptr = 0
+    last_high: dict | None = None
+    last_low: dict | None = None
+    for i in range(len(d)):
+        # 摆动点 pos 需等到 pos+swing_right 收盘后才确认；判断第 i 根 K 线时
+        # 只允许使用 pos+swing_right < i 的摆动点（严格无未来函数）
+        while swing_ptr < len(swings) and swings[swing_ptr]["pos"] + swing_right < i:
+            s = swings[swing_ptr]
+            if s["kind"] == "high":
+                last_high = s
+            else:
+                last_low = s
+            swing_ptr += 1
+        if last_high and high.iloc[i] > last_high["price"] and close.iloc[i] < last_high["price"]:
             sweeps.append(
                 {
                     "date": str(d["datetime"].iloc[i])[:16].replace(" 00:00", ""),
                     "kind": "bearish",
                     "price": round(float(close.iloc[i]), 2),
-                    "note": f"突破前高 {recent_high['price']:.2f} 后收回，扫掉追多止损（卖方流动性）→ 潜在反转",
+                    "note": f"突破前高 {last_high['price']:.2f} 后收回，扫掉追多止损（卖方流动性）→ 潜在反转",
                 }
             )
-        if recent_low and low.iloc[i] < recent_low["price"] and close.iloc[i] > recent_low["price"]:
+        if last_low and low.iloc[i] < last_low["price"] and close.iloc[i] > last_low["price"]:
             sweeps.append(
                 {
                     "date": str(d["datetime"].iloc[i])[:16].replace(" 00:00", ""),
                     "kind": "bullish",
                     "price": round(float(close.iloc[i]), 2),
-                    "note": f"跌破前低 {recent_low['price']:.2f} 后收回，扫掉割肉止损（买方流动性）→ 潜在反转",
+                    "note": f"跌破前低 {last_low['price']:.2f} 后收回，扫掉割肉止损（买方流动性）→ 潜在反转",
                 }
             )
 
-    # 4) 市场结构：最后两个 swing 的方向 + 最近突破
-    structure = {"state": "range", "last_bos": None, "last_choch": None}
+    # 4) 市场结构：逐个摆动点输出 BOS/CHoCH 事件（供回测使用，每个事件
+    #    只依赖截至该摆动点及其前序摆动点的数据），并保留"最新事件"供展示
+    structure = {"state": "range", "last_bos": None, "last_choch": None, "events": []}
     if len(swings) >= 4:
         s1, s2, s3 = swings[-3], swings[-2], swings[-1]
         # 最后确认的结构方向
@@ -157,26 +168,35 @@ def analyze_smc(
             structure["state"] = "bullish"
         elif s2["kind"] == "low" and s2["price"] < s1["price"] and s3["kind"] == "high" and s3["price"] < s1["price"]:
             structure["state"] = "bearish"
-        last = swings[-1]
+    prev_high: dict | None = None
+    prev_low: dict | None = None
+    for last in swings:
         if last["kind"] == "high":
-            prev_high = next((s for s in reversed(swings[:-1]) if s["kind"] == "high"), None)
             if prev_high:
                 if last["price"] > prev_high["price"]:
-                    structure["last_bos"] = {"date": last["date"], "kind": "bullish", "price": last["price"], "note": f"突破前高 {prev_high['price']:.2f}（BOS，趋势延续）"}
+                    ev = {"date": last["date"], "kind": "bullish", "price": last["price"], "type": "bos", "note": f"突破前高 {prev_high['price']:.2f}（BOS，趋势延续）"}
+                    structure["last_bos"] = ev
                 else:
-                    structure["last_choch"] = {"date": last["date"], "kind": "bearish", "price": last["price"], "note": f"未能突破前高 {prev_high['price']:.2f} 且结构反向（CHoCH 候选）"}
+                    ev = {"date": last["date"], "kind": "bearish", "price": last["price"], "type": "choch", "note": f"未能突破前高 {prev_high['price']:.2f} 且结构反向（CHoCH 候选）"}
+                    structure["last_choch"] = ev
+                structure["events"].append(ev)
+            prev_high = last
         elif last["kind"] == "low":
-            prev_low = next((s for s in reversed(swings[:-1]) if s["kind"] == "low"), None)
             if prev_low:
                 if last["price"] < prev_low["price"]:
-                    structure["last_bos"] = {"date": last["date"], "kind": "bearish", "price": last["price"], "note": f"跌破前低 {prev_low['price']:.2f}（BOS，趋势延续）"}
+                    ev = {"date": last["date"], "kind": "bearish", "price": last["price"], "type": "bos", "note": f"跌破前低 {prev_low['price']:.2f}（BOS，趋势延续）"}
+                    structure["last_bos"] = ev
                 else:
-                    structure["last_choch"] = {"date": last["date"], "kind": "bullish", "price": last["price"], "note": f"未跌破前低 {prev_low['price']:.2f} 且结构反向（CHoCH 候选）"}
+                    ev = {"date": last["date"], "kind": "bullish", "price": last["price"], "type": "choch", "note": f"未跌破前低 {prev_low['price']:.2f} 且结构反向（CHoCH 候选）"}
+                    structure["last_choch"] = ev
+                structure["events"].append(ev)
+            prev_low = last
 
     return {
         "fvg": fvg[-lookback:],
         "ob": ob,
-        "sweeps": _filter_sweep_gap(sweeps[-20:], sweep_min_gap),
+        # 扫荡必须全量返回：按数量截断会让早期信号因未来信号变多而消失（未来函数）
+        "sweeps": _filter_sweep_gap(sweeps, sweep_min_gap),
         "structure": structure,
         "note": "ICT/SMC 结构标注：FVG/OB/扫荡/结构突破，全部用已收盘数据、结构点需右侧确认",
     }

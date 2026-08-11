@@ -19,7 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import astock  # noqa: E402
-from quant_framework.chan import analyze_chan  # noqa: E402
+from quant_framework.chan import analyze_chan_locked  # noqa: E402
 
 OUT = Path(__file__).resolve().parent / "data" / "buy_signal_candidates.md"
 UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/117.0.0.0 Safari/537.36", "Referer": "https://quote.eastmoney.com/"}
@@ -89,7 +89,7 @@ def main() -> None:
         df = df.sort_values("datetime").reset_index(drop=True)
         last_two = sorted({str(d.date()) for d in df["datetime"]})[-2:]
         im = {str(pd.Timestamp(ts))[:16].replace(" 00:00", ""): i for i, ts in enumerate(df["datetime"])}
-        for p in analyze_chan(df)["points"]:
+        for p in analyze_chan_locked(df)["points"]:
             d = str(p["date"])[:10]
             if d in last_two and p["kind"] in ("buy1", "buy2", "buy3"):
                 candidates.append(

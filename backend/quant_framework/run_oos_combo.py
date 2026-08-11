@@ -21,7 +21,7 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from quant_framework.chan import analyze_chan  # noqa: E402
+from quant_framework.chan import analyze_chan_locked  # noqa: E402
 from run_blind_test import fetch_universe  # noqa: E402
 from run_chan_buy_portfolio import fetch_sina_kline, run_portfolio  # noqa: E402
 from run_exit_signals_all import MAX_HOLD, build_signal_maps, first_exit, trailing_exit  # noqa: E402
@@ -44,29 +44,34 @@ def build_events_from_df(df: pd.DataFrame) -> list[dict]:
     im = {str(pd.Timestamp(ts))[:16].replace(" 00:00", ""): i for i, ts in enumerate(df["datetime"])}
     maps = build_signal_maps(df)
     events: list[dict] = []
-    for p in analyze_chan(df)["points"]:
-        i = im.get(p["date"])
-        if i is None or not p["kind"].startswith("buy") or i + 7 >= len(closes):
+    for p in analyze_chan_locked(df)["points"]:
+        j = im.get(p["date"])
+        if j is None or not p["kind"].startswith("buy"):
             continue
-        prev = closes[i + 1]
-        buy = opens[i + 2]
+        known = p.get("known_at", j)
+        b = max(j + 2, known + 1)
+        if b + 5 >= len(closes):
+            continue
+        prev = closes[b - 1]
+        buy = opens[b]
         if prev <= 0 or buy <= 0 or buy / prev - 1.0 >= 0.098:
             continue
+        i_synth = b - 2
         exits: dict[str, tuple] = {}
         for sig in ("divergence", "overheat", "warn", "sweep"):
-            ex = first_exit(maps[sig], dates, i)
+            ex = first_exit(maps[sig], dates, i_synth)
             if ex:
                 exits[sig] = ex
         for pct, key in ((0.12, "trail12"),):
-            ex = trailing_exit(closes, dates, i, pct)
+            ex = trailing_exit(closes, dates, i_synth, pct)
             if ex:
                 exits[key] = ex
-        fallback_k = min(i + 2 + MAX_HOLD, len(closes) - 1)
+        fallback_k = min(b + MAX_HOLD, len(closes) - 1)
         events.append(
             {
                 "code": p["kind"],
                 "type": p["kind"],
-                "buy_date": dates[i + 2],
+                "buy_date": dates[b],
                 "buy_px": buy,
                 "blocked": False,
                 "exits": exits,

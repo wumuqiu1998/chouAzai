@@ -263,3 +263,70 @@ def analyze_chan(df: pd.DataFrame, min_gap: int = 4, min_same_kind_gap: int = 20
         "bi": bi_out,
         "params": {"min_gap": min_gap, "min_same_kind_gap": min_same_kind_gap, "warn_gap": warn_gap},
     }
+
+
+def analyze_chan_locked(
+    df: pd.DataFrame,
+    min_gap: int = 4,
+    min_same_kind_gap: int = 20,
+    warn_gap: int = 30,
+) -> dict:
+    """点内时间锁定版缠论：历史信号只增不减（无未来函数）。
+
+    全量版 analyze_chan 的买卖点会随数据增长被"重标"（同一个卖点可能在
+    更多数据到来后从 11-28 变成 12-03），这是因为笔端点要等下一个反向分型
+    确认后才真正固定。对回测而言，交易者每天只能看到当天的分析结果，
+    所以正确口径是：对每个前缀重新分析，把第一次出现的点永久保留，
+    并记录 known_at（该点第一次被观测到的 bar 序号）供成交时点对齐。
+
+    known_at 语义：前缀 t 的分析用到了第 t 根收盘及之前的数据，信号在
+    第 t 根收盘后可知，最早可在 t+1 开盘执行。
+
+    去重口径：全量版会把"同一走势"在数据增长后重标成新日期（例如三卖从
+    11-28 变成 12-03）。若把两次都保留，回测会把同一信号当成两笔重复交易。
+    这里按 known_at 顺序对同类信号做全局最小间隔过滤（与 buy_sell_points
+    的 min_same_kind_gap 一致）：同类点出现后 gap 根内再出现的新点视为
+    同一走势的重标，不再交易——该判断只用过去信息，保持无未来函数。
+
+    返回结构与 analyze_chan 相同，points 额外带 known_at/known_date；
+    zhongshu/bi 仍取全量版（仅用于展示，不参与回测成交）。
+    """
+    df = df.sort_values("datetime").reset_index(drop=True)
+    n = len(df)
+    seen: dict[tuple[str, str], dict] = {}
+    min_bars = 10
+    for t in range(min_bars, n):
+        res = analyze_chan(
+            df.iloc[: t + 1],
+            min_gap=min_gap,
+            min_same_kind_gap=min_same_kind_gap,
+            warn_gap=warn_gap,
+        )
+        for p in res["points"]:
+            key = (p["kind"], p["date"])
+            if key not in seen:
+                seen[key] = {
+                    **p,
+                    "known_at": t,
+                    "known_date": _dt_key(df["datetime"].iloc[t]),
+                }
+    points = sorted(seen.values(), key=lambda p: (p["known_at"], p["date"]))
+    # 同类信号最小间隔过滤（按首次可见顺序，只用过去信息）
+    last_seen: dict[str, dict] = {}
+    kept: list[dict] = []
+    for p in points:
+        kind = p["kind"]
+        gap = warn_gap if kind == "sell3_warn" else min_same_kind_gap
+        last = last_seen.get(kind)
+        if last is not None and p["known_at"] - last["known_at"] < gap:
+            continue
+        last_seen[kind] = p
+        kept.append(p)
+    full = analyze_chan(df, min_gap=min_gap, min_same_kind_gap=min_same_kind_gap, warn_gap=warn_gap)
+    return {
+        "bars": full["bars"],
+        "points": kept,
+        "zhongshu": full["zhongshu"],
+        "bi": full["bi"],
+        "params": {**full["params"], "locked": True},
+    }
