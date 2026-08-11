@@ -120,6 +120,10 @@ interface SmcData {
   };
 }
 
+interface RiskData {
+  bars: Array<{ date: string; label: "爆" | "险" | "封"; level: number; note: string }>;
+}
+
 interface MarketRegime {
   market: {
     state: "strong_up" | "up" | "range" | "down" | "strong_down";
@@ -265,6 +269,14 @@ async function fetchSmc(code: string, category: number, offset: number, excludeL
   return (await resp.json()) as SmcData;
 }
 
+async function fetchRisk(code: string, category: number, offset: number): Promise<RiskData> {
+  const resp = await fetch(`/api/quant/risk/alert?code=${code}&category=${category}&offset=${offset}`, {
+    headers: authHeaders(),
+  });
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  return (await resp.json()) as RiskData;
+}
+
 async function fetchMarketRegime(): Promise<MarketRegime> {
   const resp = await fetch("/api/quant/smc/market-regime", { headers: authHeaders() });
   if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
@@ -378,6 +390,7 @@ function KLineModal({
   const [wyckoffData, setWyckoffData] = useState<WyckoffData | null>(null);
   const [smcOn, setSmcOn] = useState(() => indicatorOn(SMC_KEY));
   const [smcData, setSmcData] = useState<SmcData | null>(null);
+  const [riskData, setRiskData] = useState<RiskData | null>(null);
   const [resonance, setResonance] = useState<ResonanceData | null>(null);
   // 盘中实时：最后一根 K 线未收盘，指标只使用已收盘数据（排除末根）
   const excludeLast = tab !== "minute" && isTradingHours();
@@ -501,6 +514,23 @@ function KLineModal({
       cancelled = true;
     };
   }, [code, tab]);
+
+  // 暴跌风控标识（爆/险/封）：日/周/月K展示，分时 tab 不展示
+  useEffect(() => {
+    if (tab === "minute") {
+      setRiskData(null);
+      return;
+    }
+    let cancelled = false;
+    fetchRisk(code, Number(tab), Math.min(barCount + 60, 400))
+      .then((d) => {
+        if (!cancelled) setRiskData(d);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [code, tab, barCount]);
 
   // 分时通俗信号（顶/底/B/S/扫/突/破/变 + 近期积/派/扫/突/破/变参考位）
   useEffect(() => {
@@ -1007,6 +1037,24 @@ function KLineModal({
           );
         }
       }
+    }
+    // 暴跌风控标识：爆（红）/险（橙）/封（紫），单字提示，详情在 tooltip
+    if (riskData && riskData.bars.length > 0) {
+      const idxOf = new Map(data.map((b, i) => [b.date.slice(0, 16), i]));
+      const items: Record<string, Array<{ value: [number, number]; note: string; date: string }>> = {
+        爆: [],
+        险: [],
+        封: [],
+      };
+      riskData.bars.forEach((r) => {
+        const i = idxOf.get(r.date.slice(0, 16));
+        if (i === undefined) return;
+        const bar = data[i];
+        items[r.label]?.push({ value: [i, bar.l - chartRange * 0.05], note: r.note, date: r.date });
+      });
+      plainMarker("爆", "#ef4444", items["爆"], "bottom");
+      plainMarker("险", "#f97316", items["险"], "bottom");
+      plainMarker("封", "#a855f7", items["封"], "bottom");
     }
     // K线（分钟/日/周/月）常跨多天：Y 轴按可见数据自适应（scale:true），
     // 不再按“当天范围”钳制，否则历史K线会被压扁/裁掉。涨跌停虚线保留在真实价位。
